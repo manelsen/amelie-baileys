@@ -6,7 +6,7 @@ const { handleCommand } = require('../handlers/commandHandler');
 const { handleImageMessage } = require('../handlers/imageHandler');
 const { handleDocumentMessage } = require('../handlers/documentHandler');
 const { handleLargeAudioMessage, handleSmallAudioMessage, handlePttMessage } = require('../handlers/audioHandler');
-const { shouldRespondInGroup } = require('../utils/messageUtils');
+const { BOT_NAME } = require('../config/environment');
 
 const setupWhatsAppClient = () => {
     const client = new Client({
@@ -35,21 +35,33 @@ const setupWhatsAppClient = () => {
 
             if (msg.body.startsWith('!')) {
                 await handleCommand(msg, chatId);
-            } else if (chat.isGroup && !(await shouldRespondInGroup(msg, chat))) {
-                logger.info(`Mensagem ignorada em grupo: ${msg.body}`);
             } else if (msg.hasMedia) {
                 const attachmentData = await msg.downloadMedia();
                 
-                if (msg.type === 'audio') {
+                if (msg.type === 'image' || msg.type === 'sticker') {
+                    // Processa todas as imagens, independentemente de menção
+                    await handleImageMessage(msg, attachmentData, chatId);
+                } else if (msg.type === 'audio') {
                     await handleLargeAudioMessage(msg, attachmentData, chatId);
                 } else if (msg.type === 'ptt') {
                     await handlePttMessage(msg, attachmentData, chatId);
-                } else if (msg.type === 'image' || msg.type === 'sticker') {
-                    await handleImageMessage(msg, attachmentData, chatId);
                 } else if (msg.type === 'document') {
                     await handleDocumentMessage(msg, chatId);
                 }
+            } else if (chat.isGroup) {
+                // Verifica se o bot foi mencionado em grupos
+                const mentions = await msg.getMentions();
+                const isBotMentioned = mentions.some(mention => mention.id._serialized === client.info.wid._serialized);
+                const isReplyToBot = msg.hasQuotedMsg ? (await msg.getQuotedMessage()).fromMe : false;
+                const isBotNameMentioned = msg.body.toLowerCase().includes(BOT_NAME.toLowerCase());
+
+                if (isBotMentioned || isReplyToBot || isBotNameMentioned) {
+                    await handleTextMessage(msg);
+                } else {
+                    logger.info(`Mensagem de grupo ignorada: ${msg.body}`);
+                }
             } else {
+                // Em chats privados, responde a todas as mensagens de texto
                 await handleTextMessage(msg);
             }
         } catch (error) {
