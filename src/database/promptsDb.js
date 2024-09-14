@@ -41,7 +41,7 @@ const listSystemPrompts = (chatId) => {
                 logger.error(`Erro ao listar prompts: ${err.message}`);
                 reject(err);
             } else {
-                logger.debug(`Prompts listados para chat ${chatId}: ${JSON.stringify(docs)}`);
+                logger.debug(`Prompts listados para chat ${chatId}`);
                 resolve(docs);
             }
         });
@@ -55,7 +55,7 @@ const removeSystemPrompt = (chatId, name) => {
                 logger.error(`Erro ao remover prompt: ${err.message}`);
                 reject(err);
             } else {
-                logger.debug(`Prompt '${name}' removido para chat ${chatId}. ${numRemoved} documento(s) afetado(s).`);
+                logger.debug(`Prompt '${name}' removido para chat ${chatId}`);
                 resolve(numRemoved);
             }
         });
@@ -69,7 +69,7 @@ const clearAllSystemPrompts = (chatId) => {
                 logger.error(`Erro ao limpar todos os prompts: ${err.message}`);
                 reject(err);
             } else {
-                logger.debug(`Todos os prompts removidos para chat ${chatId}. ${numRemoved} documento(s) afetado(s).`);
+                logger.debug(`Todos os prompts removidos para chat ${chatId}`);
                 resolve(numRemoved);
             }
         });

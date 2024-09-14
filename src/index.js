@@ -3,19 +3,26 @@ const fs = require('fs');
 const path = require('path');
 const { setupWhatsAppClient } = require('./services/whatsappService');
 const logger = require('./config/logger');
-const { API_KEY, MAX_HISTORY, BOT_NAME } = require('./config/environment');
+const { API_KEY, BOT_NAME } = require('./config/environment');
 
 const initializeProject = () => {
     logger.info('Iniciando configuração do projeto...');
 
-    // Criar pasta de banco de dados se não existir
+    createDatabaseFolder();
+    verifyEnvironmentVariables();
+
+    logger.info('Configuração do projeto concluída');
+};
+
+const createDatabaseFolder = () => {
     const dbPath = path.join(__dirname, '../db');
     if (!fs.existsSync(dbPath)) {
         fs.mkdirSync(dbPath);
         logger.info('Pasta de banco de dados criada');
     }
+};
 
-    // Verificar variáveis de ambiente críticas
+const verifyEnvironmentVariables = () => {
     if (!API_KEY) {
         throw new Error('API_KEY não está definida nas variáveis de ambiente');
     }
@@ -23,8 +30,6 @@ const initializeProject = () => {
     if (!BOT_NAME) {
         throw new Error('BOT_NAME não está definida nas variáveis de ambiente');
     }
-
-    logger.info('Configuração do projeto concluída');
 };
 
 const initializeBot = async () => {
@@ -38,7 +43,7 @@ const initializeBot = async () => {
 
         client.on('qr', (qr) => {
             logger.info('QR Code gerado. Aguardando leitura...');
-            // Aqui você pode adicionar lógica para exibir o QR code, se necessário
+            // Lógica para exibir o QR code, se necessário
         });
 
         client.on('ready', () => {
@@ -67,7 +72,3 @@ process.on('uncaughtException', (error) => {
 
 // Iniciar o bot
 initializeBot();
-
-module.exports = {
-    initializeBot // Exportamos para caso seja necessário em testes ou em outros módulos
-};

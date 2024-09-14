@@ -4,6 +4,12 @@ const { sendLongMessage } = require('../utils/messageUtils');
 const logger = require('../config/logger');
 const { withContext } = require('../services/contextManager');
 
+/**
+ * Handler para mensagens de texto.
+ * @param {object} msg - Mensagem recebida.
+ * @param {object} context - Contexto do chat.
+ * @param {string} chatId - ID do chat.
+ */
 const handleTextMessage = withContext(async (msg, context, chatId) => {
     try {
         const { config } = context;

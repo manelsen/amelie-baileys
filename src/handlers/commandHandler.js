@@ -1,7 +1,13 @@
-const { getConfig, setConfig } = require('../database/configDb');
+const {
+    getConfig,
+    setSystemPrompt,
+    getSystemPrompt,
+    listSystemPrompts,
+    setConfig,
+    removeSystemPrompt,
+    updateConfigDisableType,
+} = require('../database/configDb');
 const { resetChat } = require('../utils/chatUtils');
-const { setSystemPrompt, getSystemPrompt, listSystemPrompts, removeSystemPrompt } = require('../database/promptsDb');
-const { listGroupUsers } = require('../utils/userUtils');
 const logger = require('../config/logger');
 
 const handleCommand = async (msg, chatId) => {
@@ -27,13 +33,9 @@ const handleCommand = async (msg, chatId) => {
                 await listGroupUsers(msg);
                 break;
             case 'audio':
-                await handleAudioCommand(msg, args, chatId);
-                break;
             case 'image':
-                await handleImageCommand(msg, args, chatId);
-                break;
             case 'document':
-                await handleDocumentCommand(msg, args, chatId);
+                await handleMediaCommand(msg, args, chatId, command.toLowerCase());
                 break;
             default:
                 await msg.reply('Comando desconhecido. Use !help para ver os comandos disponíveis.');
@@ -72,7 +74,7 @@ const handlePromptCommand = async (msg, args, chatId) => {
             if (name && rest.length > 0) {
                 const promptText = rest.join(' ');
                 await setSystemPrompt(chatId, name, promptText);
-                await msg.reply(`System Instruction "${name}" definida com sucesso. Note que instruções padrão sobre identificação de usuários e priorização de mensagens recentes serão adicionadas automaticamente.`);
+                await msg.reply(`System Instruction "${name}" definida com sucesso.`);
             } else {
                 await msg.reply('Uso correto: !prompt set <nome> <texto>');
             }
@@ -81,7 +83,7 @@ const handlePromptCommand = async (msg, args, chatId) => {
             if (name) {
                 const prompt = await getSystemPrompt(chatId, name);
                 if (prompt) {
-                    await msg.reply(`System Instruction "${name}":\n${prompt.text}`);
+                    await msg.reply(`System Instruction "${name}":\n${prompt}`);
                 } else {
                     await msg.reply(`System Instruction "${name}" não encontrada.`);
                 }
@@ -90,18 +92,12 @@ const handlePromptCommand = async (msg, args, chatId) => {
             }
             break;
         case 'list':
-            try {
-                const prompts = await listSystemPrompts(chatId);
-                if (prompts.length > 0) {
-                    const promptList = prompts.map(p => p.name).join(', ');
-                    await msg.reply(`System Instructions disponíveis: ${promptList}`);
-                } else {
-                    await msg.reply('Nenhuma System Instruction definida.');
-                }
-                logger.debug(`Prompts listados para ${chatId}: ${JSON.stringify(prompts)}`);
-            } catch (error) {
-                logger.error(`Erro ao listar prompts: ${error.message}`);
-                await msg.reply('Ocorreu um erro ao listar as System Instructions.');
+            const prompts = await listSystemPrompts(chatId);
+            if (prompts.length > 0) {
+                const promptList = prompts.map((p) => p.name).join(', ');
+                await msg.reply(`System Instructions disponíveis: ${promptList}`);
+            } else {
+                await msg.reply('Nenhuma System Instruction definida.');
             }
             break;
         case 'use':
@@ -179,54 +175,27 @@ const handleConfigCommand = async (msg, args, chatId) => {
     }
 };
 
-const handleAudioCommand = async (msg, args, chatId) => {
+const handleMediaCommand = async (msg, args, chatId, type) => {
     const [subcommand] = args;
     switch (subcommand) {
         case 'enable':
-            await setConfig(chatId, 'disableAudio', false);
-            await msg.reply('Processamento de áudio habilitado.');
+            await updateConfigDisableType(chatId, type, false);
+            await msg.reply(`Processamento de ${type} habilitado.`);
             break;
         case 'disable':
-            await setConfig(chatId, 'disableAudio', true);
-            await msg.reply('Processamento de áudio desabilitado.');
+            await updateConfigDisableType(chatId, type, true);
+            await msg.reply(`Processamento de ${type} desabilitado.`);
             break;
         default:
-            await msg.reply('Uso correto: !audio enable ou !audio disable');
+            await msg.reply(`Uso correto: !${type} enable ou !${type} disable`);
     }
 };
 
-const handleImageCommand = async (msg, args, chatId) => {
-    const [subcommand] = args;
-    switch (subcommand) {
-        case 'enable':
-            await setConfig(chatId, 'disableImage', false);
-            await msg.reply('Processamento de imagem habilitado.');
-            break;
-        case 'disable':
-            await setConfig(chatId, 'disableImage', true);
-            await msg.reply('Processamento de imagem desabilitado.');
-            break;
-        default:
-            await msg.reply('Uso correto: !image enable ou !image disable');
-    }
-};
-
-const handleDocumentCommand = async (msg, args, chatId) => {
-    const [subcommand] = args;
-    switch (subcommand) {
-        case 'enable':
-            await setConfig(chatId, 'disableDocument', false);
-            await msg.reply('Processamento de documentos habilitado.');
-            break;
-        case 'disable':
-            await setConfig(chatId, 'disableDocument', true);
-            await msg.reply('Processamento de documentos desabilitado.');
-            break;
-        default:
-            await msg.reply('Uso correto: !document enable ou !document disable');
-    }
+const handleUsersCommand = async (msg, chatId) => {
+    // Supondo que esta função liste os usuários do grupo corretamente.
+    await listGroupUsers(msg);
 };
 
 module.exports = {
-    handleCommand
+    handleCommand,
 };

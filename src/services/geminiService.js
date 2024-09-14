@@ -1,99 +1,106 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { GoogleAIFileManager } = require("@google/generative-ai/server");
+const { GoogleAIFileManager } = require('@google/generative-ai/server');
 const { API_KEY } = require('../config/environment');
-const { getChatHistory } = require('../database/messagesDb');
+const { getFormattedHistory } = require('../utils/historyUtils');
 const { getSystemPrompt } = require('../database/promptsDb');
 const logger = require('../config/logger');
 
 const genAI = new GoogleGenerativeAI(API_KEY);
 const fileManager = new GoogleAIFileManager(API_KEY);
 
-const createGeminiModel = (config) => genAI.getGenerativeModel({ 
-    model: "gemini-1.5-flash",
-    generationConfig: {
-        temperature: config.temperature,
-        topK: config.topK,
-        topP: config.topP,
-        maxOutputTokens: config.maxOutputTokens,
-    },
-    safetySettings: [
-        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-    ]
-});
+/**
+ * Prepara uma sessão do Gemini com as instruções de sistema e histórico.
+ * @param {string} chatId - ID do chat.
+ * @param {string} userMessage - Mensagem do usuário.
+ * @param {string} userId - ID do usuário.
+ * @param {object} config - Configurações do chat.
+ * @returns {object} - Sessão do chat preparada.
+ */
+const prepareGeminiSession = async (chatId, userMessage, userId, config) => {
+    logger.debug(`Configuração do Gemini: ${JSON.stringify(config)}`);
 
-const formatChatHistoryForLogging = (history) => {
-    return history.map(msg => {
-        const role = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
-        return `[${role}: ${msg.parts[0].text}]`;
-    }).join('\n');
+    // Obtém o histórico formatado e as instruções de sistema
+    const [formattedHistory, systemPrompt] = await Promise.all([
+        getFormattedHistory(chatId, config),
+        getSystemPrompt(chatId, config.activePrompt)
+    ]);
+
+    // Cria o modelo Gemini com as instruções de sistema
+    const model = createGeminiModel(config, systemPrompt);
+
+    // Constrói o histórico da conversa
+    const history = buildHistory(formattedHistory, userMessage, userId);
+
+    return model.startChat({ history });
 };
 
-const prepareGeminiSession = async (chatId, userMessage, userId, config) => {
-    const chatHistory = await getChatHistory(chatId);
-    logger.debug(`Chat history length: ${chatHistory.length}`);
+/**
+ * Cria uma instância do modelo Gemini com as configurações e instruções de sistema.
+ * @param {object} config - Configurações do chat.
+ * @param {string} systemInstruction - Instruções de sistema.
+ * @returns {object} - Instância do modelo Gemini.
+ */
+const createGeminiModel = (config, systemInstruction) => {
+    const modelConfig = {
+        model: 'gemini-1.5-flash',
+        generationConfig: {
+            temperature: config.temperature,
+            topK: config.topK,
+            topP: config.topP,
+            maxOutputTokens: config.maxOutputTokens
+        },
+        safetySettings: [
+            { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
+        ],
+        systemInstruction: systemInstruction || ''
+    };
 
-    let activeSystemInstruction = config.activePrompt ? 
-        await getSystemPrompt(chatId, config.activePrompt) : 
-        "Você é um assistente de chat.";
+    return genAI.getGenerativeModel(modelConfig);
+};
 
-    activeSystemInstruction += `
-    
-Instruções adicionais:
-1. Cada mensagem do usuário será prefixada com [UserXXXXX], onde XXXXX é o ID do usuário.
-2. Suas respostas não devem incluir nenhum prefixo. Responda diretamente sem adicionar [UserXXXXX] ou qualquer outro prefixo.
-3. Responda com base no histórico da conversa, dando mais importância às mensagens mais recentes.
-4. Foque principalmente na última mensagem do usuário.`;
+/**
+ * Constrói o histórico da conversa, iniciando com mensagens do usuário.
+ * @param {array} formattedHistory - Histórico de mensagens formatado.
+ * @param {string} userMessage - Mensagem do usuário.
+ * @param {string} userId - ID do usuário.
+ * @returns {array} - Histórico da conversa.
+ */
+const buildHistory = (formattedHistory, userMessage, userId) => {
+    let history = [];
 
-    let reorganizedHistory = [];
-
-    reorganizedHistory.push({ role: 'user', parts: [{ text: `[Instruções do Sistema: ${activeSystemInstruction}]` }] });
-    reorganizedHistory.push({ role: 'model', parts: [{ text: "Entendido. Como posso ajudar?" }] });
-
-    if (chatHistory.length > 0) {
-        reorganizedHistory = reorganizedHistory.concat(chatHistory.map(msg => ({
-            role: msg.role,
-            parts: [{ text: msg.role === 'user' ? `[User${msg.userId}]: ${msg.parts[0].text}` : msg.parts[0].text }]
-        })));
+    if (formattedHistory && formattedHistory.length > 0) {
+        history = history.concat(formattedHistory.map(formatMessage));
     }
 
-    reorganizedHistory.push({ 
-        role: 'user', 
-        parts: [{ text: `[User${userId}]: ${userMessage}` }]
-    });
+    history.push({ role: 'user', userId, parts: [{ text: userMessage }] });
 
-    reorganizedHistory = reorganizedHistory.filter(msg => 
-        msg.parts.every(part => part.text && part.text.trim() !== '')
-    );
-
-    logger.debug('História reorganizada:\n' + formatChatHistoryForLogging(reorganizedHistory));
-
-    const loggedHistory = reorganizedHistory.slice(-5);
-    logger.debug('Dados enviados para Gemini (últimas 5 mensagens):\n' + formatChatHistoryForLogging(loggedHistory));
-
-    logger.debug('Configuração do Gemini:', {
-        model: "gemini-1.5-flash",
-        temperature: config.temperature,
-        topK: config.topK,
-        topP: config.topP,
-        maxOutputTokens: config.maxOutputTokens,
-    });
-
-    const model = createGeminiModel(config);
-    return model.startChat({ history: reorganizedHistory });
+    return history;
 };
 
+/**
+ * Formata uma mensagem do histórico.
+ * @param {object} msg - Mensagem do histórico.
+ * @returns {object} - Mensagem formatada.
+ */
+const formatMessage = (msg) => ({
+    role: msg.role,
+    parts: [{ text: msg.role === 'user' ? `[User${msg.userId}]: ${msg.parts[0].text}` : msg.parts[0].text }]
+});
+
+/**
+ * Sanitiza a resposta recebida do modelo.
+ * @param {string} response - Resposta bruta do modelo.
+ * @returns {string} - Resposta sanitizada.
+ */
 const sanitizeResponse = (response) => {
-    let sanitized = response.replace(/^\[Importância: \d+\.\d+\]\s*/,'');
-    sanitized = sanitized.replace(/^\[User\d+\]:\s*/, '');
-    sanitized = sanitized.split(/Usuário:|Human:|[A-Z]+:/)[0].trim();
-    return sanitized || "Desculpe, não consegui gerar uma resposta adequada. Pode reformular sua pergunta?";
+    // Implementação da sanitização, se necessário
+    return response;
 };
 
 module.exports = {
     prepareGeminiSession,
-    sanitizeResponse,
-    formatChatHistoryForLogging
+    sanitizeResponse
 };

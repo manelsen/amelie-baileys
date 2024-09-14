@@ -1,36 +1,49 @@
-const Datastore = require('nedb');
+const Datastore = require('nedb-promises');
 const path = require('path');
 const logger = require('../config/logger');
 const { BOT_NAME } = require('../config/environment');
 
+// Caminho do banco de dados de mensagens
 const dbPath = path.join(__dirname, '../../db/messages.db');
-const messagesDb = new Datastore({ filename: dbPath, autoload: true });
+const messagesDb = Datastore.create({ filename: dbPath, autoload: true });
 
-const getChatHistory = (chatId, limit = 1000) => {
-    return new Promise((resolve, reject) => {
-        messagesDb.find({ chatId: chatId })
+/**
+ * Recupera o histórico de chat de um chat específico.
+ * @param {string} chatId - ID do chat.
+ * @param {number} limit - Número máximo de mensagens a serem recuperadas.
+ * @returns {array} - Histórico de mensagens do chat.
+ */
+const getChatHistory = async (chatId, limit = 1000) => {
+    try {
+        const messages = await messagesDb.find({ chatId })
             .sort({ timestamp: 1 })
             .limit(limit)
-            .exec((err, docs) => {
-                if (err) {
-                    logger.error(`Erro ao buscar histórico: ${err.message}`);
-                    reject(err);
-                } else {
-                    logger.debug(`Histórico recuperado para chat ${chatId}`);
-                    const formattedHistory = docs.map(doc => ({
-                        role: doc.sender === BOT_NAME ? 'model' : 'user',
-                        userId: doc.sender === BOT_NAME ? BOT_NAME : doc.userId,
-                        parts: [{ text: doc.content }]
-                    }));
-                    logger.debug('Histórico formatado:', JSON.stringify(formattedHistory, null, 2));
-                    resolve(formattedHistory);
-                }
-            });
-    });
+            .exec();
+        
+        logger.debug(`Histórico recuperado para chat ${chatId}`);
+
+        const formattedHistory = messages.map((msg) => ({
+            role: msg.sender === BOT_NAME ? 'model' : 'user',
+            userId: msg.sender === BOT_NAME ? BOT_NAME : msg.userId,
+            parts: [{ text: msg.content }]
+        }));
+        logger.debug('Histórico formatado:', JSON.stringify(formattedHistory, null, 2));
+
+        return formattedHistory;
+    } catch (err) {
+        logger.error(`Erro ao buscar histórico de chat: ${err.message}`);
+        return [];
+    }
 };
 
-const saveChatMessage = (chatId, sender, message) => {
-    return new Promise((resolve, reject) => {
+/**
+ * Salva uma mensagem no histórico do chat.
+ * @param {string} chatId - ID do chat.
+ * @param {string} sender - Remetente da mensagem.
+ * @param {string} message - Conteúdo da mensagem.
+ */
+const saveChatMessage = async (chatId, sender, message) => {
+    try {
         const userId = sender === BOT_NAME ? BOT_NAME : sender.split('@')[0];
         const messageDoc = {
             chatId,
@@ -39,16 +52,12 @@ const saveChatMessage = (chatId, sender, message) => {
             content: message,
             timestamp: Date.now()
         };
-        messagesDb.insert(messageDoc, (err) => {
-            if (err) {
-                logger.error(`Erro ao salvar mensagem: ${err.message}`);
-                reject(err);
-            } else {
-                logger.debug(`Mensagem salva para chat ${chatId}:`, JSON.stringify(messageDoc, null, 2));
-                resolve();
-            }
-        });
-    });
+
+        await messagesDb.insert(messageDoc);
+        logger.debug(`Mensagem salva para chat ${chatId}:`, JSON.stringify(messageDoc, null, 2));
+    } catch (err) {
+        logger.error(`Erro ao salvar mensagem: ${err.message}`);
+    }
 };
 
 module.exports = {
