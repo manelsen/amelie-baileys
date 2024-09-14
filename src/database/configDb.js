@@ -10,7 +10,8 @@ const defaultConfig = {
     maxOutputTokens: 1024,
     disableDocument: false,
     disableAudio: false,
-    disableImage: false
+    disableImage: false,
+    botName: 'Assistente'  // Adicionando um nome padrão para o bot
 };
 
 const getConfig = async (chatId) => {
@@ -21,7 +22,7 @@ const getConfig = async (chatId) => {
                 reject(err);
             } else {
                 const config = { ...defaultConfig, ...(doc || {}) };
-                logger.debug(`Configuração recuperada para chat ${chatId}:`, JSON.stringify(config, null, 2));
+                logger.debug(`Configuração recuperada para chat ${chatId}: ${JSON.stringify(config)}`);
                 resolve(config);
             }
         });

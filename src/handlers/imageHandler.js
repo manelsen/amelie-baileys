@@ -1,27 +1,28 @@
-const { getConfig } = require('../database/configDb');
 const { saveChatMessage } = require('../database/messagesDb');
 const { prepareGeminiSession, sanitizeResponse } = require('../services/geminiService');
 const { sendLongMessage } = require('../utils/messageUtils');
 const { getFormattedHistory } = require('../utils/historyUtils');
 const logger = require('../config/logger');
+const { withContext } = require('../services/contextManager');
 
-const handleImageMessage = async (msg, imageData, chatId) => {
+const handleImageMessage = withContext(async (msg, context, chatId) => {
     try {
-        const config = await getConfig(chatId);
-        logger.debug(`Configuração para chat ${chatId}:`, config);
-       
+        const { config } = context;
+        
         if (config.disableImage) {
-            logger.info(`Processamento de imagem desabilitado para chat ${chatId}`);
             await msg.reply('O processamento de imagem está desabilitado para este chat.');
             return;
         }
 
+        const imageData = await msg.downloadMedia();
         if (!imageData || !imageData.data) {
             logger.warn(`Recebido ${msg.type} sem dados válidos`, { msgFrom: msg.from, chatId: chatId });
             await msg.reply(`Desculpe, não foi possível processar este ${msg.type === 'sticker' ? 'sticker' : 'imagem'}. Ele pode ser de um tipo não suportado.`);
             return;
         }
 
+        const sender = msg.author || msg.from;
+        const userId = sender.split('@')[0];
         const userPrompt = msg.body && msg.body.trim() !== '' ? msg.body.trim() : `${msg.type === 'sticker' ? 'Sticker' : 'Imagem'} sem Prompt`;
         const formattedHistory = await getFormattedHistory(chatId, config);
 
@@ -32,7 +33,7 @@ const handleImageMessage = async (msg, imageData, chatId) => {
             }
         };
 
-        const chatSession = await prepareGeminiSession(chatId, userPrompt, config);
+        const chatSession = await prepareGeminiSession(chatId, userPrompt, userId, config);
         const contentParts = [
             { text: `Histórico da conversa:\n${formattedHistory}\n\nAgora, analise a ${msg.type === 'sticker' ? 'sticker' : 'imagem'} considerando o contexto acima.` },
             imagePart,
@@ -48,7 +49,7 @@ const handleImageMessage = async (msg, imageData, chatId) => {
 
         await sendLongMessage(msg, response);
 
-        await saveChatMessage(chatId, msg.author || msg.from, `[${msg.type === 'sticker' ? 'Sticker' : 'Imagem'}] ${userPrompt}`);
+        await saveChatMessage(chatId, sender, `[${msg.type === 'sticker' ? 'Sticker' : 'Imagem'}] ${userPrompt}`);
         await saveChatMessage(chatId, config.botName, response);
 
     } catch (error) {
@@ -60,7 +61,7 @@ const handleImageMessage = async (msg, imageData, chatId) => {
         });
         await msg.reply(`Desculpe, ocorreu um erro ao processar a ${msg.type === 'sticker' ? 'sticker' : 'imagem'}. Por favor, tente novamente.`);
     }
-};
+});
 
 module.exports = {
     handleImageMessage

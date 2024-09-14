@@ -41,7 +41,7 @@ const listSystemPrompts = (chatId) => {
                 logger.error(`Erro ao listar prompts: ${err.message}`);
                 reject(err);
             } else {
-                logger.debug(`Prompts listados para chat ${chatId}`);
+                logger.debug(`Prompts listados para chat ${chatId}: ${JSON.stringify(docs)}`);
                 resolve(docs);
             }
         });

@@ -90,12 +90,18 @@ const handlePromptCommand = async (msg, args, chatId) => {
             }
             break;
         case 'list':
-            const prompts = await listSystemPrompts(chatId);
-            if (prompts.length > 0) {
-                const promptList = prompts.map(p => p.name).join(', ');
-                await msg.reply(`System Instructions disponíveis: ${promptList}`);
-            } else {
-                await msg.reply('Nenhuma System Instruction definida.');
+            try {
+                const prompts = await listSystemPrompts(chatId);
+                if (prompts.length > 0) {
+                    const promptList = prompts.map(p => p.name).join(', ');
+                    await msg.reply(`System Instructions disponíveis: ${promptList}`);
+                } else {
+                    await msg.reply('Nenhuma System Instruction definida.');
+                }
+                logger.debug(`Prompts listados para ${chatId}: ${JSON.stringify(prompts)}`);
+            } catch (error) {
+                logger.error(`Erro ao listar prompts: ${error.message}`);
+                await msg.reply('Ocorreu um erro ao listar as System Instructions.');
             }
             break;
         case 'use':

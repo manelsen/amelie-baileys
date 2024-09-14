@@ -24,7 +24,7 @@ const createGeminiModel = (config) => genAI.getGenerativeModel({
     ]
 });
 
-const formatHistoryForConsole = (history) => {
+const formatChatHistoryForLogging = (history) => {
     return history.map(msg => {
         const role = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
         return `[${role}: ${msg.parts[0].text}]`;
@@ -68,10 +68,10 @@ Instruções adicionais:
         msg.parts.every(part => part.text && part.text.trim() !== '')
     );
 
-    logger.debug('História reorganizada:\n' + formatHistoryForConsole(reorganizedHistory));
+    logger.debug('História reorganizada:\n' + formatChatHistoryForLogging(reorganizedHistory));
 
     const loggedHistory = reorganizedHistory.slice(-5);
-    logger.debug('Dados enviados para Gemini (últimas 5 mensagens):\n' + formatHistoryForConsole(loggedHistory));
+    logger.debug('Dados enviados para Gemini (últimas 5 mensagens):\n' + formatChatHistoryForLogging(loggedHistory));
 
     logger.debug('Configuração do Gemini:', {
         model: "gemini-1.5-flash",
@@ -95,5 +95,5 @@ const sanitizeResponse = (response) => {
 module.exports = {
     prepareGeminiSession,
     sanitizeResponse,
-    fileManager
+    formatChatHistoryForLogging
 };

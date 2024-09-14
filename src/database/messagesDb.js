@@ -31,9 +31,11 @@ const getChatHistory = (chatId, limit = 1000) => {
 
 const saveChatMessage = (chatId, sender, message) => {
     return new Promise((resolve, reject) => {
+        const userId = sender === BOT_NAME ? BOT_NAME : sender.split('@')[0];
         const messageDoc = {
             chatId,
             sender,
+            userId,
             content: message,
             timestamp: Date.now()
         };
@@ -50,7 +52,6 @@ const saveChatMessage = (chatId, sender, message) => {
 };
 
 module.exports = {
-    messagesDb,
     getChatHistory,
     saveChatMessage
 };
