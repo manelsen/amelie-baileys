@@ -72,7 +72,7 @@ const handlePromptCommand = async (msg, args, chatId) => {
             if (name && rest.length > 0) {
                 const promptText = rest.join(' ');
                 await setSystemPrompt(chatId, name, promptText);
-                await msg.reply(`System Instruction "${name}" definida com sucesso.`);
+                await msg.reply(`System Instruction "${name}" definida com sucesso. Note que instruções padrão sobre identificação de usuários e priorização de mensagens recentes serão adicionadas automaticamente.`);
             } else {
                 await msg.reply('Uso correto: !prompt set <nome> <texto>');
             }

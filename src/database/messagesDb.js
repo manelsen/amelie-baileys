@@ -6,7 +6,7 @@ const { BOT_NAME } = require('../config/environment');
 const dbPath = path.join(__dirname, '../../db/messages.db');
 const messagesDb = new Datastore({ filename: dbPath, autoload: true });
 
-const getChatHistory = (chatId, limit) => {
+const getChatHistory = (chatId, limit = 1000) => {
     return new Promise((resolve, reject) => {
         messagesDb.find({ chatId: chatId })
             .sort({ timestamp: 1 })
@@ -19,6 +19,7 @@ const getChatHistory = (chatId, limit) => {
                     logger.debug(`Histórico recuperado para chat ${chatId}`);
                     const formattedHistory = docs.map(doc => ({
                         role: doc.sender === BOT_NAME ? 'model' : 'user',
+                        userId: doc.sender === BOT_NAME ? BOT_NAME : doc.userId,
                         parts: [{ text: doc.content }]
                     }));
                     logger.debug('Histórico formatado:', JSON.stringify(formattedHistory, null, 2));
@@ -49,6 +50,7 @@ const saveChatMessage = (chatId, sender, message) => {
 };
 
 module.exports = {
+    messagesDb,
     getChatHistory,
     saveChatMessage
 };

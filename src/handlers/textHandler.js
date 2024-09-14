@@ -9,9 +9,16 @@ const handleTextMessage = async (msg) => {
         const chat = await msg.getChat();
         const chatId = chat.id._serialized;
         const sender = msg.author || msg.from;
+        const userId = sender.split('@')[0];
 
         const chatConfig = await getConfig(chatId);
-        const chatSession = await prepareGeminiSession(chatId, msg.body, chatConfig);
+        if (!chatConfig) {
+            throw new Error(`Configuração não encontrada para o chat ${chatId}`);
+        }
+
+        logger.debug('Configuração do chat:', JSON.stringify(chatConfig, null, 2));
+
+        const chatSession = await prepareGeminiSession(chatId, msg.body, userId, chatConfig);
 
         const result = await chatSession.sendMessage(msg.body);
         let response = sanitizeResponse(await result.response.text());
@@ -25,7 +32,7 @@ const handleTextMessage = async (msg) => {
 
         await sendLongMessage(msg, response);
     } catch (error) {
-        logger.error(`Erro ao processar mensagem de texto: ${error.message}`, { error });
+        logger.error(`Erro ao processar mensagem de texto: ${error.message}`, { error, stack: error.stack });
         await msg.reply('Desculpe, ocorreu um erro ao processar sua mensagem. Por favor, tente novamente.');
     }
 };

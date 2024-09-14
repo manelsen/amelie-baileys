@@ -21,7 +21,7 @@ const getConfig = async (chatId) => {
                 reject(err);
             } else {
                 const config = { ...defaultConfig, ...(doc || {}) };
-                logger.debug(`Configuração recuperada para chat ${chatId}`);
+                logger.debug(`Configuração recuperada para chat ${chatId}:`, JSON.stringify(config, null, 2));
                 resolve(config);
             }
         });

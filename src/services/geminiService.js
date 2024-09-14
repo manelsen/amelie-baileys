@@ -24,28 +24,62 @@ const createGeminiModel = (config) => genAI.getGenerativeModel({
     ]
 });
 
-const prepareGeminiSession = async (chatId, userMessage, config) => {
+const formatHistoryForConsole = (history) => {
+    return history.map(msg => {
+        const role = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
+        return `[${role}: ${msg.parts[0].text}]`;
+    }).join('\n');
+};
+
+const prepareGeminiSession = async (chatId, userMessage, userId, config) => {
     const chatHistory = await getChatHistory(chatId);
-    const activeSystemInstruction = config.activePrompt ? 
-        (await getSystemPrompt(chatId, config.activePrompt))?.text : 
-        "Você é um assistente de chat. Responda com base no histórico da conversa, dando mais importância às mensagens mais recentes. Foque principalmente na última mensagem do usuário.";
+    logger.debug(`Chat history length: ${chatHistory.length}`);
+
+    let activeSystemInstruction = config.activePrompt ? 
+        await getSystemPrompt(chatId, config.activePrompt) : 
+        "Você é um assistente de chat.";
+
+    activeSystemInstruction += `
+    
+Instruções adicionais:
+1. Cada mensagem do usuário será prefixada com [UserXXXXX], onde XXXXX é o ID do usuário.
+2. Suas respostas não devem incluir nenhum prefixo. Responda diretamente sem adicionar [UserXXXXX] ou qualquer outro prefixo.
+3. Responda com base no histórico da conversa, dando mais importância às mensagens mais recentes.
+4. Foque principalmente na última mensagem do usuário.`;
 
     let reorganizedHistory = [];
 
-    if (chatHistory.length === 0) {
-        reorganizedHistory.push({ role: 'user', parts: [{ text: `[Instruções do Sistema: ${activeSystemInstruction}]` }] });
-        reorganizedHistory.push({ role: 'model', parts: [{ text: "Entendido. Como posso ajudar?" }] });
-    } else {
-        reorganizedHistory = chatHistory.map(msg => ({
-            role: msg.sender === config.botName ? 'model' : 'user',
-            parts: [{ text: msg.content }]
-        }));
+    reorganizedHistory.push({ role: 'user', parts: [{ text: `[Instruções do Sistema: ${activeSystemInstruction}]` }] });
+    reorganizedHistory.push({ role: 'model', parts: [{ text: "Entendido. Como posso ajudar?" }] });
+
+    if (chatHistory.length > 0) {
+        reorganizedHistory = reorganizedHistory.concat(chatHistory.map(msg => ({
+            role: msg.role,
+            parts: [{ text: msg.role === 'user' ? `[User${msg.userId}]: ${msg.parts[0].text}` : msg.parts[0].text }]
+        })));
     }
 
-    reorganizedHistory.push({ role: 'user', parts: [{ text: `[Instruções do Sistema: ${activeSystemInstruction}]` }] });
-    reorganizedHistory.push({ role: 'user', parts: [{ text: userMessage }] });
+    reorganizedHistory.push({ 
+        role: 'user', 
+        parts: [{ text: `[User${userId}]: ${userMessage}` }]
+    });
 
-    logger.debug('História reorganizada:', reorganizedHistory);
+    reorganizedHistory = reorganizedHistory.filter(msg => 
+        msg.parts.every(part => part.text && part.text.trim() !== '')
+    );
+
+    logger.debug('História reorganizada:\n' + formatHistoryForConsole(reorganizedHistory));
+
+    const loggedHistory = reorganizedHistory.slice(-5);
+    logger.debug('Dados enviados para Gemini (últimas 5 mensagens):\n' + formatHistoryForConsole(loggedHistory));
+
+    logger.debug('Configuração do Gemini:', {
+        model: "gemini-1.5-flash",
+        temperature: config.temperature,
+        topK: config.topK,
+        topP: config.topP,
+        maxOutputTokens: config.maxOutputTokens,
+    });
 
     const model = createGeminiModel(config);
     return model.startChat({ history: reorganizedHistory });
@@ -53,6 +87,7 @@ const prepareGeminiSession = async (chatId, userMessage, config) => {
 
 const sanitizeResponse = (response) => {
     let sanitized = response.replace(/^\[Importância: \d+\.\d+\]\s*/,'');
+    sanitized = sanitized.replace(/^\[User\d+\]:\s*/, '');
     sanitized = sanitized.split(/Usuário:|Human:|[A-Z]+:/)[0].trim();
     return sanitized || "Desculpe, não consegui gerar uma resposta adequada. Pode reformular sua pergunta?";
 };
