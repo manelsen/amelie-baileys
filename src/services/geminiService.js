@@ -2,6 +2,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleAIFileManager } = require("@google/generative-ai/server");
 const { API_KEY } = require('../config/environment');
 const { getChatHistory } = require('../database/messagesDb');
+const { getSystemPrompt } = require('../database/promptsDb');
 const logger = require('../config/logger');
 
 const genAI = new GoogleGenerativeAI(API_KEY);

@@ -6,3 +6,4 @@ temp_*
 .idea/
 .wwebjs_auth/
 .wwebjs_cache/
+*db
