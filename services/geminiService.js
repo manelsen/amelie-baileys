@@ -3,7 +3,8 @@ const { GoogleAIFileManager } = require('@google/generative-ai/server');
 const { API_KEY } = require('../config/environment');
 const { getFormattedHistory } = require('../utils/historyUtils');
 const { getSystemPrompt } = require('../database/promptsDb');
-const logger = require('../config/logger');
+const { log } = require('../dispatchers/loggingDispatcher');
+const { handleError } = require('../dispatchers/errorDispatcher');
 
 const genAI = new GoogleGenerativeAI(API_KEY);
 const fileManager = new GoogleAIFileManager(API_KEY);
@@ -17,21 +18,22 @@ const fileManager = new GoogleAIFileManager(API_KEY);
  * @returns {object} - Sessão do chat preparada.
  */
 const prepareGeminiSession = async (chatId, userMessage, userId, config) => {
-    logger.debug(`Configuração do Gemini: ${JSON.stringify(config)}`);
+    try {
+        log('debug', `Configuração do Gemini: ${JSON.stringify(config)}`);
 
-    // Obtém o histórico formatado e as instruções de sistema
-    const [formattedHistory, systemPrompt] = await Promise.all([
-        getFormattedHistory(chatId, config),
-        getSystemPrompt(chatId, config.activePrompt)
-    ]);
+        const [formattedHistory, systemPrompt] = await Promise.all([
+            getFormattedHistory(chatId, config),
+            getSystemPrompt(chatId, config.activePrompt)
+        ]);
 
-    // Cria o modelo Gemini com as instruções de sistema
-    const model = createGeminiModel(config, systemPrompt);
+        const model = createGeminiModel(config, systemPrompt);
+        const history = buildHistory(formattedHistory, userMessage, userId);
 
-    // Constrói o histórico da conversa
-    const history = buildHistory(formattedHistory, userMessage, userId);
-
-    return model.startChat({ history });
+        return model.startChat({ history });
+    } catch (error) {
+        handleError(error, { chatId, userId });
+        throw error;
+    }
 };
 
 /**
@@ -75,7 +77,7 @@ const buildHistory = (formattedHistory, userMessage, userId) => {
         history = history.concat(formattedHistory.map(formatMessage));
     }
 
-    history.push({ role: 'user', userId, parts: [{ text: userMessage }] });
+    history.push({ role: 'user', parts: [{ text: userMessage }] });
 
     return history;
 };
@@ -96,11 +98,35 @@ const formatMessage = (msg) => ({
  * @returns {string} - Resposta sanitizada.
  */
 const sanitizeResponse = (response) => {
-    // Implementação da sanitização, se necessário
-    return response;
+    let sanitized = response.replace(/^\[Importância: \d+\.\d+\]\s*/,'');
+    sanitized = sanitized.replace(/^\[User\d+\]:\s*/, '');
+    sanitized = sanitized.split(/Usuário:|Human:|[A-Z]+:/)[0].trim();
+    return sanitized || "Desculpe, não consegui gerar uma resposta adequada. Pode reformular sua pergunta?";
+};
+
+const processFile = async (filePath, mimeType, userPrompt, config) => {
+    try {
+        const uploadedFile = await fileManager.uploadFile({
+            filePath: filePath,
+            mimeType: mimeType
+        });
+
+        const model = createGeminiModel(config);
+
+        const result = await model.generateContent([
+            userPrompt,
+            { fileUri: uploadedFile.file.uri }
+        ]);
+
+        return sanitizeResponse(await result.response.text());
+    } catch (error) {
+        handleError(error, { filePath, mimeType });
+        throw error;
+    }
 };
 
 module.exports = {
     prepareGeminiSession,
-    sanitizeResponse
+    sanitizeResponse,
+    processFile
 };

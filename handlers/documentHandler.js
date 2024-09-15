@@ -1,50 +1,27 @@
-const { getConfig } = require('../database/configDb');
 const { prepareGeminiSession, sanitizeResponse } = require('../services/geminiService');
 const logger = require('../config/logger');
-const { messageDispatcher } = require('../dispatchers/messageDispatcher');
-const { log } = require('../dispatchers/loggingDispatcher');
 const fs = require('fs').promises;
 const path = require('path');
 const mime = require('mime-types');
 const { uploadToFileManager } = require('../utils/fileUtils');
 
-/**
- * Lida com mensagens de documento recebidas.
- * @param {object} msg - Mensagem recebida.
- * @param {string} chatId - ID do chat.
- */
-const handleDocumentMessage = async (msg, chatId) => {
+const handleDocumentMessage = async (msg, context, chatId) => {
     try {
-        const context = await extractDocumentContext(msg, chatId);
-        const response = await processDocument(context);
+        const documentContext = await extractDocumentContext(msg, context, chatId);
+        const response = await processDocument(documentContext);
 
-        const processedMessage = {
-            response,
-            messageLabel: '[Documento]'
-        };
-
-        // Passa o contexto e a mensagem processada para o dispatcher
-        await messageDispatcher(context, processedMessage);
-
-        // Log do evento
-        log('info', `Documento processado para chat ${chatId}`, { userId: context.userId });
+        logger.info(`Documento processado para chat ${chatId}`, { userId: documentContext.userId });
+        
+        return response;
     } catch (error) {
-        // Envia o erro para o errorDispatcher
-        const { handleError } = require('../dispatchers/errorDispatcher');
-        await handleError(context, error);
+        logger.error(`Erro ao processar documento: ${error.message}`, { error, chatId });
+        return 'Desculpe, ocorreu um erro ao processar o documento. Por favor, tente novamente.';
     }
 };
 
-/**
- * Extrai contexto específico para o processamento de documentos.
- * @param {object} msg - Mensagem recebida.
- * @param {string} chatId - ID do chat.
- * @returns {object} - Contexto extraído.
- */
-const extractDocumentContext = async (msg, chatId) => {
-    const config = await getConfig(chatId);
+const extractDocumentContext = async (msg, context, chatId) => {
+    const { config } = context;
     if (config.disableDocument) {
-        await msg.reply('O processamento de documentos está desabilitado para este chat.');
         throw new Error('Processamento de documentos desabilitado');
     }
 
@@ -62,22 +39,17 @@ const extractDocumentContext = async (msg, chatId) => {
         'image/png', 'image/jpeg', 'image/gif', 'image/webp'
     ];
 
-    if (!supportedMimeTypes.includes(mimeType)) {
+/*    if (!supportedMimeTypes.includes(mimeType)) {
         throw new Error(`Tipo MIME não suportado: ${mimeType}`);
-    }
+    }*/
 
     const sender = msg.author || msg.from;
     const userId = sender.split('@')[0];
     const userPrompt = msg.body && msg.body.trim() !== '' ? msg.body.trim() : `Documento sem Prompt`;
 
-    return { msg, chatId, config, sender, userId, documentData, fileName, mimeType, userPrompt };
+    return { ...context, chatId, sender, userId, documentData, fileName, mimeType, userPrompt };
 };
 
-/**
- * Processa o documento usando o modelo Gemini.
- * @param {object} context - Contexto da mensagem.
- * @returns {string} - Resposta gerada.
- */
 const processDocument = async (context) => {
     const { documentData, mimeType, userPrompt, config } = context;
     const tempFilePath = await saveDocumentToFile(documentData);
@@ -93,20 +65,9 @@ const processDocument = async (context) => {
 
     const result = await chatSession.sendMessage(`[Documento]: ${uploadedFile.file.uri}`);
     const responseText = await result.response.text();
-    let response = sanitizeResponse(responseText);
-
-    if (!response || response.trim() === '') {
-        response = "Desculpe, ocorreu um erro ao processar o documento. Por favor, tente novamente.";
-    }
-
-    return response;
+    return sanitizeResponse(responseText);
 };
 
-/**
- * Salva o documento em um arquivo temporário.
- * @param {object} documentData - Dados do documento.
- * @returns {string} - Caminho do arquivo salvo.
- */
 const saveDocumentToFile = async (documentData) => {
     const tempFilePath = path.join(__dirname, `../../temp_doc_${Date.now()}`);
     await fs.writeFile(tempFilePath, documentData.data, 'base64');
