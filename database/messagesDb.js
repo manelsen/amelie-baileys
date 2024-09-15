@@ -5,7 +5,7 @@ const { BOT_NAME } = require('../config/environment');
 
 // Caminho do banco de dados de mensagens
 console.log(__dirname)
-const dbPath = path.join(__dirname, '../../db/messages.db');
+const dbPath = path.join(__dirname, '../db/messages.db');
 const messagesDb = Datastore.create({ filename: dbPath, autoload: true });
 
 /**

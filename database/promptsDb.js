@@ -2,7 +2,7 @@ const Datastore = require('nedb');
 const logger = require('../config/logger');
 const path = require('path');
 
-const dbPath = path.join(__dirname, '../../db/prompts.db');
+const dbPath = path.join(__dirname, '../db/prompts.db');
 const promptsDb = new Datastore({ filename: dbPath, autoload: true });
 
 const setSystemPrompt = (chatId, name, text) => {

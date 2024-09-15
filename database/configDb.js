@@ -2,8 +2,8 @@ const Datastore = require('nedb-promises');
 
 // Carregar os bancos de dados existentes
 console.log(__dirname)
-const configDb = Datastore.create({ filename: '/../db/config.db', autoload: true });
-const promptsDb = Datastore.create({ filename: '/../db/prompts.db', autoload: true });
+const configDb = Datastore.create({ filename: '../db/config.db', autoload: true });
+const promptsDb = Datastore.create({ filename: '../db/prompts.db', autoload: true });
 
 /**
  * Obtém a configuração para um chat específico.

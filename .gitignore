@@ -7,3 +7,4 @@ temp_*
 .wwebjs_auth/
 .wwebjs_cache/
 *db
+gulpfile.js
