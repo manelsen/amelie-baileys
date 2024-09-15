@@ -1,9 +1,31 @@
 const Datastore = require('nedb-promises');
+const path = require('path');
+const { BOT_NAME } = require('../config/environment');
 
 // Carregar os bancos de dados existentes
-console.log(__dirname)
-const configDb = Datastore.create({ filename: '../db/config.db', autoload: true });
-const promptsDb = Datastore.create({ filename: '../db/prompts.db', autoload: true });
+const configDb = Datastore.create({ filename: path.join(__dirname, '../db/config.db'), autoload: true });
+const promptsDb = Datastore.create({ filename: path.join(__dirname, '../db/prompts.db'), autoload: true });
+
+// Configuração padrão completa
+const defaultConfig = {
+    // Configurações do modelo Gemini
+    temperature: 0.7,
+    topK: 40,
+    topP: 0.95,
+    maxOutputTokens: 1000,
+
+    // Configurações de processamento de mídia
+    disableAudio: false,
+    disableImage: false,
+    disableDocument: false,
+
+    // Configurações específicas do chat
+    botName: BOT_NAME,
+    activePrompt: "defaultPrompt",
+
+    // Outras configurações
+    maxHistory: 1000
+};
 
 /**
  * Obtém a configuração para um chat específico.
@@ -11,8 +33,8 @@ const promptsDb = Datastore.create({ filename: '../db/prompts.db', autoload: tru
  * @returns {object} - Configuração do chat.
  */
 const getConfig = async (chatId) => {
-    const config = await configDb.findOne({ chatId });
-    return config || {};
+    const storedConfig = await configDb.findOne({ chatId });
+    return { ...defaultConfig, ...storedConfig };
 };
 
 /**
@@ -25,10 +47,8 @@ const setSystemPrompt = async (chatId, name, promptText) => {
     const existingPrompt = await promptsDb.findOne({ chatId, name });
 
     if (existingPrompt) {
-        // Atualiza o prompt existente
         await promptsDb.update({ _id: existingPrompt._id }, { $set: { text: promptText } });
     } else {
-        // Insere um novo prompt
         await promptsDb.insert({ chatId, name, text: promptText });
     }
 };
@@ -72,15 +92,7 @@ const removeSystemPrompt = async (chatId, name) => {
  * @param {any} value - Novo valor do parâmetro.
  */
 const setConfig = async (chatId, param, value) => {
-    const existingConfig = await configDb.findOne({ chatId });
-
-    if (existingConfig) {
-        await configDb.update({ chatId }, { $set: { [param]: value } });
-    } else {
-        // Cria uma nova configuração se não existir
-        const newConfig = { chatId, [param]: value };
-        await configDb.insert(newConfig);
-    }
+    await configDb.update({ chatId }, { $set: { [param]: value } }, { upsert: true });
 };
 
 /**

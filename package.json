@@ -2,14 +2,16 @@
   "name": "amelie",
   "version": "1.0.0",
   "description": "WhatsApp bot using Gemini API",
-  "main": "src/index.js",
+  "main": "index.js",
   "scripts": {
-    "stat": "node src/index.js"
+    "stat": "node index.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.19.0",
+    "chokidar": "^4.0.0",
     "dotenv": "^16.0.3",
     "gulp": "^5.0.0",
+    "gulp-cli": "^3.0.0",
     "mime-types": "^2.1.35",
     "nedb": "^1.8.0",
     "nedb-promises": "^6.2.3",

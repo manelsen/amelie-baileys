@@ -2,7 +2,7 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const { log } = require('../dispatchers/loggingDispatcher');
 const { handleError } = require('../dispatchers/errorDispatcher');
-const { messageDispatcher } = require('../dispatchers/messageDispatcher');
+const messageDispatcher = require('../dispatchers/messageDispatcher');
 const { getConfig } = require('../database/configDb');
 const { BOT_NAME } = require('../config/environment');
 
@@ -39,11 +39,6 @@ const setupWhatsAppClient = () => {
                 msgFrom: msg.from,
                 msgBody: msg.body
             });
-            try {
-                await msg.reply('Desculpe, ocorreu um erro inesperado. Por favor, tente novamente mais tarde.');
-            } catch (replyError) {
-                handleError(replyError, { context: 'Erro ao enviar mensagem de erro' });
-            }
         }
     });
 

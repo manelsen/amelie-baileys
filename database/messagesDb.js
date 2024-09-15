@@ -4,7 +4,6 @@ const { log } = require('../dispatchers/loggingDispatcher');
 const { BOT_NAME } = require('../config/environment');
 
 // Caminho do banco de dados de mensagens
-console.log(__dirname)
 const dbPath = path.join(__dirname, '../db/messages.db');
 const messagesDb = Datastore.create({ filename: dbPath, autoload: true });
 
@@ -13,8 +12,9 @@ const messagesDb = Datastore.create({ filename: dbPath, autoload: true });
  * @param {string} chatId - ID do chat.
  * @param {string} sender - Remetente da mensagem.
  * @param {string} message - Conteúdo da mensagem.
+ * @param {string} role - Papel do remetente ('user' ou 'bot').
  */
-const saveChatMessage = async (chatId, sender, message) => {
+const saveChatMessage = async (chatId, sender, message, role = 'user') => {
     try {
         if (!chatId || typeof chatId !== 'string') {
             throw new Error('chatId inválido');
@@ -23,14 +23,9 @@ const saveChatMessage = async (chatId, sender, message) => {
             throw new Error('message inválida');
         }
 
-        let userId;
-        if (sender === BOT_NAME) {
-            userId = BOT_NAME;
-        } else if (typeof sender === 'string' && sender.includes('@')) {
+        let userId = sender;
+        if (sender !== BOT_NAME) {
             userId = sender.split('@')[0];
-        } else {
-            userId = 'unknown';
-            log('warn', `Formato de sender não reconhecido: ${sender}`);
         }
 
         const messageDoc = {
@@ -38,6 +33,7 @@ const saveChatMessage = async (chatId, sender, message) => {
             sender,
             userId,
             content: message,
+            role,
             timestamp: Date.now()
         };
 
@@ -50,6 +46,7 @@ const saveChatMessage = async (chatId, sender, message) => {
             sender, 
             messagePreview: message ? message.substring(0, 50) : 'N/A' 
         });
+        throw err;
     }
 };
 
@@ -69,13 +66,13 @@ const getChatHistory = async (chatId, limit = 1000) => {
         log('debug', `Histórico recuperado para chat ${chatId}: ${messages.length} mensagens`);
 
         return messages.map((msg) => ({
-            role: msg.sender === BOT_NAME ? 'model' : 'user',
+            role: msg.role,
             userId: msg.userId,
             parts: [{ text: msg.content }]
         }));
     } catch (err) {
         log('error', `Erro ao buscar histórico de chat: ${err.message}`, { error: err, chatId });
-        return [];
+        throw err;
     }
 };
 
@@ -91,7 +88,7 @@ const clearChatHistory = async (chatId) => {
         return numRemoved;
     } catch (err) {
         log('error', `Erro ao limpar histórico de chat: ${err.message}`, { error: err, chatId });
-        return 0;
+        throw err;
     }
 };
 

@@ -4,21 +4,13 @@ const { API_KEY } = require('../config/environment');
 const { getFormattedHistory } = require('../utils/historyUtils');
 const { getSystemPrompt } = require('../database/promptsDb');
 const { log } = require('../dispatchers/loggingDispatcher');
-const { handleError } = require('../dispatchers/errorDispatcher');
 
 const genAI = new GoogleGenerativeAI(API_KEY);
 const fileManager = new GoogleAIFileManager(API_KEY);
 
-/**
- * Prepara uma sessão do Gemini com as instruções de sistema e histórico.
- * @param {string} chatId - ID do chat.
- * @param {string} userMessage - Mensagem do usuário.
- * @param {string} userId - ID do usuário.
- * @param {object} config - Configurações do chat.
- * @returns {object} - Sessão do chat preparada.
- */
 const prepareGeminiSession = async (chatId, userMessage, userId, config) => {
     try {
+        log('debug', `Preparando sessão Gemini para chatId: ${chatId}, userId: ${userId}`);
         log('debug', `Configuração do Gemini: ${JSON.stringify(config)}`);
 
         const [formattedHistory, systemPrompt] = await Promise.all([
@@ -26,12 +18,21 @@ const prepareGeminiSession = async (chatId, userMessage, userId, config) => {
             getSystemPrompt(chatId, config.activePrompt)
         ]);
 
-        const model = createGeminiModel(config, systemPrompt);
-        const history = buildHistory(formattedHistory, userMessage, userId);
+        log('debug', `Histórico formatado obtido. Tamanho: ${formattedHistory.length}`);
+        log('debug', `System Prompt: ${systemPrompt ? 'Obtido' : 'Não definido'}`);
 
+        const model = createGeminiModel(config, systemPrompt);
+        
+        // Garantir que o histórico comece com uma mensagem do usuário
+        let history = formattedHistory.length > 0 ? formattedHistory : [];
+        if (history.length === 0 || history[0].role !== 'user') {
+            history.unshift({ role: 'user', parts: [{ text: userMessage }] });
+        }
+
+        log('debug', `Iniciando chat com histórico de ${history.length} mensagens`);
         return model.startChat({ history });
     } catch (error) {
-        handleError(error, { chatId, userId });
+        log('error', `Erro ao preparar sessão Gemini: ${error.message}`, { error, chatId, userId });
         throw error;
     }
 };

@@ -1,7 +1,7 @@
 const Datastore = require('nedb');
 const logger = require('../config/logger');
 
-const usersDb = new Datastore({ filename: '../../db/users.db', autoload: true });
+const usersDb = new Datastore({ filename: './db/users.db', autoload: true });
 
 const getOrCreateUser = async (sender, chat) => {
     return new Promise((resolve, reject) => {

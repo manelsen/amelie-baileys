@@ -1,7 +1,8 @@
 const { prepareGeminiSession, sanitizeResponse } = require('../services/geminiService');
-const { saveChatMessage } = require('../database/messagesDb');
 const { log } = require('../dispatchers/loggingDispatcher');
 const { handleError } = require('../dispatchers/errorDispatcher');
+const messageStorageDispatcher = require('../dispatchers/messageStorageDispatcher');
+const { BOT_NAME } = require('../config/environment');
 
 const handleTextMessage = async (msg, context, chatId) => {
     try {
@@ -20,8 +21,8 @@ const handleTextMessage = async (msg, context, chatId) => {
             response = "Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente.";
         }
 
-        await saveChatMessage(chatId, sender, msg.body);
-        await saveChatMessage(chatId, config.botName, response;
+        await messageStorageDispatcher.saveMessage(chatId, sender, msg.body, 'user');
+        await messageStorageDispatcher.saveMessage(chatId, BOT_NAME, response, 'bot');
 
         return response;
     } catch (error) {
