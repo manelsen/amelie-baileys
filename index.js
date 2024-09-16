@@ -8,6 +8,22 @@ const { API_KEY, BOT_NAME } = require('./config/environment');
 
 let whatsappClient;
 
+const fs = require('fs').promises;
+const path = require('path');
+
+async function ensureDbDirectory() {
+  const dbPath = path.join(__dirname, 'db');
+  try {
+    await fs.access(dbPath);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      await fs.mkdir(dbPath, { recursive: true });
+    } else {
+      throw error;
+    }
+  }
+}
+
 const initializeProject = () => {
     logger.info('Iniciando configuração do projeto...');
     createDatabaseFolder();
@@ -16,11 +32,8 @@ const initializeProject = () => {
 };
 
 const createDatabaseFolder = () => {
-    const dbPath = path.join(__dirname, '../db');
-    if (!fs.existsSync(dbPath)) {
-        fs.mkdirSync(dbPath);
-        logger.info('Pasta de banco de dados criada');
-    }
+    const dbPath = path.join(__dirname, 'db');
+    ensureDbDirectory();
 };
 
 const verifyEnvironmentVariables = () => {

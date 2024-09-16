@@ -8,3 +8,4 @@ temp_*
 .wwebjs_cache/
 *db
 gulpfile.js
+logs/*
