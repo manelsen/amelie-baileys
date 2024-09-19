@@ -58,10 +58,12 @@ const lastResponses = new Map();
 // Configuração padrão
 const defaultConfig = {
     temperature: 0.9,
-    topK: 40,
+    topK: 93,
     topP: 0.95,
     maxOutputTokens: 1024,
-};
+    mediaImage: true,  // Habilita descrição de imagens por padrão
+    mediaAudio: true,  // Habilita transcrição de áudio por padrão
+}
 
 // Configuração do cliente WhatsApp
 const client = new Client({
@@ -93,15 +95,18 @@ client.on('message_create', async (msg) => {
 
         const chatId = chat.id._serialized;
 
-        if (chat.isGroup) {
+        // Verifica se é um comando
+        const isCommand = msg.body.startsWith('!');
+
+        if (chat.isGroup && !isCommand) {
             const shouldRespond = await shouldRespondInGroup(msg, chat);
             if (!shouldRespond && !msg.hasMedia) return;
         }
 
-        if (msg.body.startsWith('!')) {
+        if (isCommand) {
             logger.info(`Comando detectado: ${msg.body}`);
             await handleCommand(msg, chatId);
-        } else     if (msg.hasMedia) {
+        } else if (msg.hasMedia) {
             const attachmentData = await msg.downloadMedia();
             if (attachmentData.mimetype === 'audio/ogg; codecs=opus' || 
                 attachmentData.mimetype.startsWith('audio/')) {
@@ -115,7 +120,6 @@ client.on('message_create', async (msg) => {
             await handleTextMessage(msg);
         }
 
-        resetSessionAfterInactivity(chatId);
     } catch (error) {
         logger.error(`Erro ao processar mensagem: ${error.message}`, { error });
         await msg.reply('Desculpe, ocorreu um erro inesperado. Por favor, tente novamente mais tarde.');
@@ -139,7 +143,11 @@ async function calculateAverageMessageLength(chatId) {
     });
   }
 
-async function shouldRespondInGroup(msg, chat) {
+  async function shouldRespondInGroup(msg, chat) {
+    if (msg.body.startsWith('!')) {
+        return true;
+    }
+
     const mentions = await msg.getMentions();
     const isBotMentioned = mentions.some(mention => mention.id._serialized === client.info.wid._serialized);
 
@@ -151,6 +159,7 @@ async function shouldRespondInGroup(msg, chat) {
 
     const isBotNameMentioned = msg.body.toLowerCase().includes(bot_name.toLowerCase());
 
+    // Para mensagens que não são comandos, mantém a lógica original
     return isBotMentioned || isReplyToBot || isBotNameMentioned;
 }
 
@@ -215,7 +224,34 @@ async function handleCegoCommand(msg, chatId) {
         await setConfig(chatId, 'mediaAudio', false);
 
         // Definir e ativar o prompt Audiomar
-        const audiomarPrompt = `Você é um chatbot especializado em audiodescrição, projetado para funcionar em um grupo de WhatsApp com mais de 200 pessoas cegas. Sua função principal é descrever imagens e stickers compartilhados no grupo, fornecendo duas descrições distintas para cada imagem: Uma descrição profissional e detalhada Uma interpretação amigável e alegre Diretrizes Gerais: Responda imediatamente quando uma imagem ou sticker for compartilhado no grupo. Mantenha suas respostas concisas, mas informativas. Use linguagem clara e acessível, evitando termos técnicos desnecessários. Seja respeitoso e inclusivo em todas as suas interações. Estrutura da Resposta: Para cada imagem ou sticker, sua resposta deve seguir este formato: [Audiodescrição] (Forneça uma descrição objetiva e detalhada da imagem) [Interpretação] (Ofereça uma interpretação mais leve e divertida do conteúdo) Diretrizes para a Descrição Profissional: Comece com uma visão geral da imagem. Descreva os elementos principais, da esquerda para a direita e de cima para baixo. Mencione cores, formas, expressões e posições relevantes. Inclua detalhes importantes, como texto visível ou logotipos. Seja objetivo e evite interpretações pessoais. Diretrizes para a Interpretação Amigável: Use um tom leve e alegre. Interprete o humor ou a emoção transmitida pela imagem. Faça conexões com experiências cotidianas ou sentimentos comuns. Use linguagem mais coloquial e expressiva. Se apropriado, inclua uma pitada de humor leve.`;
+        const audiomarPrompt = `Você é um chatbot especializado em audiodescrição, projetado para funcionar em um grupo de WhatsApp com mais de 200 pessoas cegas. Sua função principal é descrever imagens e stickers compartilhados no grupo, fornecendo uma audiodescrição profissional, detalhada, didática e polida.
+        
+        Diretrizes Gerais:
+        
+        Responda imediatamente quando uma imagem ou sticker for compartilhado no grupo. Mantenha suas respostas concisas, mas informativas. Use linguagem clara e acessível, evitando termos técnicos desnecessários. Seja respeitoso e inclusivo em todas as suas interações.
+        
+        Estrutura da Resposta: Para cada imagem ou sticker, sua resposta deve seguir este formato:
+        
+        [Audiodescrição]
+        (Forneça uma descrição objetiva e detalhada da imagem) 
+        
+        Diretrizes para a Descrição Profissional:
+
+        Comece com uma visão geral da imagem antes de entrar em detalhes.
+        Descreva os elementos principais da imagem, do mais importante ao menos relevante.
+        Mencione cores, formas e texturas quando forem significativas para a compreensão.
+        Indique a posição dos elementos na imagem (por exemplo, "no canto superior direito").
+        Descreva expressões faciais e linguagem corporal em fotos com pessoas.
+        Mencione o tipo de imagem (por exemplo, fotografia, ilustração, pintura).
+        Informe sobre o enquadramento (close-up, plano geral, etc.) quando relevante.
+        Inclua detalhes do cenário ou fundo que contribuam para o contexto.
+        Evite usar termos subjetivos como "bonito" ou "feio".
+        Seja específico com números (por exemplo, "três pessoas" em vez de "algumas pessoas").
+        Descreva texto visível na imagem, incluindo legendas ou títulos.
+        Mencione a escala ou tamanho relativo dos objetos quando importante.
+        Indique se a imagem é em preto e branco ou colorida.
+Descreva a iluminação se for um elemento significativo da imagem.
+Para obras de arte, inclua informações sobre o estilo artístico e técnicas utilizadas.`;
 
         await setSystemPrompt(chatId, 'Audiomar', audiomarPrompt);
         await setActiveSystemPrompt(chatId, 'Audiomar');
@@ -247,14 +283,14 @@ async function handleTextMessage(msg) {
       const history = await getMessageHistory(chatId);
       const userPromptText = `Histórico de chat: (formato: nome do usuário e em seguida mensagem; responda à última mensagem)\n\n${history.join('\n')}`;
   
-      console.log(`Gerando resposta para: ${userPromptText}`);
+      logger.debug(`Gerando resposta para: ${userPromptText}`);
       const response = await generateResponseWithText(userPromptText, chatId);
-      console.log(`Resposta gerada (sem emojis): ${response}`);
+      logger.debug(`Resposta gerada (sem emojis): ${response}`);
   
       await updateMessageHistory(chatId, chatConfig.botName, response, true);
-      await sendLongMessage(msg, response);
+      await sendMessage(msg, response);
     } catch (error) {
-      console.error(`Erro ao processar mensagem de texto: ${error.message}`);
+      logger.error(`Erro ao processar mensagem de texto: ${error.message}`);
       await msg.reply('Desculpe, ocorreu um erro ao processar sua mensagem. Por favor, tente novamente.');
     }
 }  
@@ -296,6 +332,13 @@ async function getOrCreateUser(sender, chat) {
 
 async function handleAudioMessage(msg, audioData, chatId) {
     try {
+        // Verifica se a transcrição de áudio está habilitada para este chat
+        const config = await getConfig(chatId);
+        if (!config.mediaAudio) {
+            logger.info(`Transcrição de áudio desabilitada para o chat ${chatId}. Ignorando mensagem de áudio.`);
+            return; // Sai da função sem processar o áudio
+        }
+
         // Verifica se o áudio é menor ou igual a 20MB
         const audioSizeInMB = audioData.data.length / (1024 * 1024);
         if (audioSizeInMB > 20) {
@@ -350,7 +393,7 @@ async function handleAudioMessage(msg, audioData, chatId) {
         const result = await modelWithInstructions.generateContent(contentParts);
         const response = await result.response.text();
 
-        await sendLongMessage(msg, response);
+        await sendMessage(msg, response);
 
         // Atualizar o histórico de mensagens
         await updateMessageHistory(chatId, msg.author || msg.from, '[Áudio]', false);
@@ -364,6 +407,13 @@ async function handleAudioMessage(msg, audioData, chatId) {
 
 async function handleImageMessage(msg, imageData, chatId) {
     try {
+        // Verifica se a descrição de imagem está habilitada para este chat
+        const config = await getConfig(chatId);
+        if (!config.mediaImage) {
+            logger.info(`Descrição de imagem desabilitada para o chat ${chatId}. Ignorando mensagem de imagem.`);
+            return; // Sai da função sem processar a imagem
+        }
+
         let userPrompt = "Descreva esta imagem em detalhes, focando apenas no que você vê com certeza. Se não tiver certeza sobre algo, não mencione.";
         
         // Verifica se há uma mensagem de texto junto com a imagem
@@ -403,7 +453,6 @@ async function handleImageMessage(msg, imageData, chatId) {
             systemInstruction: userConfig.systemInstructions + "\nFoque apenas na imagem mais recente. Descreva apenas o que você vê com certeza. Evite fazer suposições ou inferências além do que é claramente visível na imagem."
         });
 
-        // Prepara o conteúdo para geração, incluindo o histórico e prompt do usuário
         const contentParts = [
             imagePart,
             { text: `Contexto recente da conversa:\n${historyPrompt}\n\nAgora, considerando apenas a imagem fornecida e ignorando qualquer contexto anterior que não seja diretamente relevante, ${userPrompt}\n\nLembre-se: Descreva apenas o que você vê com certeza na imagem. Se não tiver certeza sobre algo, não mencione.` }
@@ -412,7 +461,7 @@ async function handleImageMessage(msg, imageData, chatId) {
         const result = await modelWithInstructions.generateContent(contentParts);
 
         const response = await result.response.text();
-        await sendLongMessage(msg, response);
+        await sendMessage(msg, response);
 
         // Atualizar o histórico de mensagens
         await updateMessageHistory(chatId, msg.author || msg.from, `[Imagem] ${userPrompt}`, false);
@@ -427,16 +476,6 @@ async function handleImageMessage(msg, imageData, chatId) {
 async function generateResponseWithText(userPrompt, chatId) {
     try {
       const userConfig = await getConfig(chatId);
-      const averageLength = await calculateAverageMessageLength(chatId);
-      
-      const minLength = Math.round(averageLength * 0.8);
-      const maxLength = Math.round(averageLength * 1.2);
-      
-      const systemInstructionWithLength = `${userConfig.systemInstructions}
-  Por favor, mantenha sua resposta entre ${minLength} e ${maxLength} caracteres. 
-  Se você não puder responder completamente dentro deste limite, forneça a informação mais importante e sugira que o usuário peça mais detalhes se necessário.
-  Não use emojis ou emoticons em suas respostas.`;
-  
       const model = genAI.getGenerativeModel({
         model: "gemini-1.5-flash",
         generationConfig: {
@@ -451,7 +490,7 @@ async function generateResponseWithText(userPrompt, chatId) {
           { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
           { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
         ],
-        systemInstruction: systemInstructionWithLength
+        systemInstruction: userConfig.systemInstructions
       });
       
       const result = await model.generateContent(userPrompt);
@@ -461,12 +500,7 @@ async function generateResponseWithText(userPrompt, chatId) {
         throw new Error('Resposta vazia gerada pelo modelo');
       }
   
-      // Remover emojis da resposta
       responseText = removeEmojis(responseText);
-  
-      // Logging para fins de depuração
-      console.log(`Tamanho médio das mensagens: ${averageLength}`);
-      console.log(`Tamanho da resposta gerada (após remoção de emojis): ${responseText.length}`);
   
       return responseText;
     } catch (error) {
@@ -770,7 +804,7 @@ async function getConfig(chatId) {
     });
 }
 
-async function sendLongMessage(msg, text) {
+async function sendMessage(msg, text) {
     try {
         if (!text || typeof text !== 'string' || text.trim() === '') {
             logger.error('Tentativa de enviar mensagem inválida:', { text });
@@ -791,19 +825,6 @@ async function sendLongMessage(msg, text) {
         });
         await msg.reply('Desculpe, ocorreu um erro ao enviar a resposta. Por favor, tente novamente.');
     }
-}
-
-function resetSessionAfterInactivity(chatId, inactivityPeriod = 3600000) { // 1 hora
-    setTimeout(() => {
-        logger.info(`Sessão resetada para o chat ${chatId} após inatividade`);
-        resetHistory(chatId);
-    }, inactivityPeriod);
-}
-
-function isSimilar(text1, text2) {
-    // Implemente sua lógica de comparação de similaridade aqui
-    // Você pode usar algoritmos como Levenshtein distance, cosine similarity, etc.
-    return false; // Placeholder
 }
 
 client.initialize();
@@ -832,5 +853,4 @@ module.exports = {
     handleTextMessage,
     handleImageMessage,
     handleAudioMessage,
-    // Adicione outras funções que você quer testar
   };
