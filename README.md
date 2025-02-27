@@ -33,6 +33,8 @@ Seja bem-vindo(a) ao repositório da **Amélie**, sua ajudante de Inteligência 
 
 Clique [aqui](http://wa.me/5531993340000) para falar com ela no WhatsApp.
 
+Se quiser adicioná-la a um grupo, basta salvá-la como contato e colocar o contato no grupo.
+
 ## Quer contribuir com o Projeto?
 
 Faça assim:
@@ -75,11 +77,11 @@ Faça assim:
 
 ## Comandos Úteis
 
-- `**!help**` Lista os comandos disponíveis e mostra como cada um funciona.
+- `!help` Lista os comandos disponíveis e mostra como cada um funciona.
 
-- `**!reset**` Restaura tudo ao padrão e limpa o histórico de mensagens do chat.
+- `!reset` Restaura tudo ao padrão e limpa o histórico de mensagens do chat.
 
-- `**!config**`
+- `!config`
 
   ```
   !config set <param> <valor>   // Ex.: !config set temperature 0.8
@@ -88,7 +90,7 @@ Faça assim:
 
   Ajusta o comportamento do modelo (ex.: temperature) ou habilita/desabilita recursos (ex.: descrição de imagem).
 
-- `**!prompt**`
+- `!prompt`
 
   ```
   !prompt set <nome> <texto>    // Define uma nova 'personalidade' ou System Instruction
@@ -98,7 +100,7 @@ Faça assim:
   !prompt clear                 // Remove a personalidade ativa e volta ao padrão
   ```
 
-- `**!cego**` Ajusta as configurações para grupos com pessoas cegas, habilitando descrição de imagens e desabilitando transcrições de áudio, além de ativar um prompt específico de audiodescrição.
+- `!cego` Ajusta as configurações para grupos com pessoas cegas, habilitando descrição de imagens e desabilitando transcrições de áudio, além de ativar um prompt específico de audiodescrição.
 
 ## Links Importantes
 
@@ -115,4 +117,6 @@ Fique à vontade para abrir *issues*, mandar *pull requests* ou sugestões. A id
 
 Este projeto está sob a MIT License. Isso significa que você pode usar, modificar e distribuir este código conforme achar melhor, mas sempre lembre de dar os devidos créditos!
 
-Aproveite a **Amélie** e divirta-se! Se precisar de ajuda ou tiver alguma sugestão, é só chamar. Com amor, *A equipe da Amélie*
+Aproveite a **Amélie** e divirta-se! Se precisar de ajuda ou tiver alguma sugestão, é só chamar.
+
+Com amor, *A equipe da Amélie*
