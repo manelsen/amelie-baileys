@@ -1,27 +1,57 @@
-const qrcode = require('qrcode-terminal');
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const qrcode                  = require('qrcode-terminal');
+const { Client, LocalAuth }   = require('whatsapp-web.js');
+const { GoogleGenerativeAI }  = require("@google/generative-ai");
 const { GoogleAIFileManager } = require("@google/generative-ai/server");
-const dotenv = require('dotenv');
-const winston = require('winston');
-const Datastore = require('nedb');
+const dotenv                  = require('dotenv');
+const winston                 = require('winston');
+const Datastore               = require('nedb');
+const crypto                  = require('crypto');
+const fs                      = require('fs');
+const path                    = require('path');
 
 dotenv.config();
 
 // Configuração de variáveis de ambiente
-const API_KEY = process.env.API_KEY;
-const MAX_HISTORY = parseInt(process.env.MAX_HISTORY || '500');
-let bot_name = process.env.BOT_NAME || 'Amelie';
+const API_KEY                 = process.env.API_KEY;
+const MAX_HISTORY             = parseInt(process.env.MAX_HISTORY || '50');
+
+let bot_name                  = process.env.BOT_NAME || 'Amelie';
+let lastProcessedAudio        = null;
 
 // Configuração do logger
+function getStackInfo() {
+    const originalFunc = Error.prepareStackTrace;
+
+    try {
+        const err = new Error();
+        Error.prepareStackTrace = (_, stack) => stack;
+        const stack = err.stack;
+        Error.prepareStackTrace = originalFunc;
+
+        const caller = stack[2];
+        const fileName = path.basename(caller.getFileName());
+        const lineNumber = caller.getLineNumber();
+        return `${fileName}:${lineNumber}`;
+    } catch (e) {
+        return '';
+    }
+}
+
+const myFormat = winston.format.printf(({ timestamp, level, message, ...rest }) => {
+    const lineInfo = getStackInfo();
+    const extraData = Object.keys(rest).length ? JSON.stringify(rest, null, 2) : '';
+    return `${timestamp} [${level}] ${lineInfo}: ${message} ${extraData}`;
+});
+
 const logger = winston.createLogger({
-    level: 'debug',
-    format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.printf(({ timestamp, level, message, ...rest }) => {
-            const extraData = Object.keys(rest).length ? JSON.stringify(rest, null, 2) : '';
-            return `${timestamp} [${level}]: ${message} ${extraData}`;
-        })
+    level: 'info',
+    format: winston
+    .format
+    .combine(
+        winston
+        .format
+        .timestamp(),
+        myFormat
     ),
     transports: [
         new winston.transports.Console(),
@@ -31,20 +61,21 @@ const logger = winston.createLogger({
 
 // Configuração do NeDB
 const messagesDb = new Datastore({ filename: './db/messages.db', autoload: true });
-const promptsDb = new Datastore({ filename: './db/prompts.db', autoload: true });
-const configDb = new Datastore({ filename: './db/config.db', autoload: true });
-const usersDb = new Datastore({ filename: './db/users.db', autoload: true });
+const promptsDb  = new Datastore({ filename: './db/prompts.db' , autoload: true });
+const configDb   = new Datastore({ filename: './db/config.db'  , autoload: true });
+const groupsDb   = new Datastore({ filename: './db/groups.db'  , autoload: true });
+const usersDb    = new Datastore({ filename: './db/users.db'   , autoload: true });
 
 // Inicialização do GoogleGenerativeAI
 const genAI = new GoogleGenerativeAI(API_KEY);
 
 // Inicialização do modelo Gemini
 const model = genAI.getGenerativeModel({ 
-    model: "gemini-1.5-flash",
+    model: "gemini-2.0-flash",
     safetySettings: [
       { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
       { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
       { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
     ]
   });
@@ -58,11 +89,12 @@ const lastResponses = new Map();
 // Configuração padrão
 const defaultConfig = {
     temperature: 0.9,
-    topK: 93,
+    topK: 40,
     topP: 0.95,
     maxOutputTokens: 1024,
-    mediaImage: true,  // Habilita descrição de imagens por padrão
-    mediaAudio: true,  // Habilita transcrição de áudio por padrão
+    mediaImage: true,  
+    mediaAudio: true,  
+    mediaVideo: true   
 }
 
 // Configuração do cliente WhatsApp
@@ -91,38 +123,129 @@ client.on('message_create', async (msg) => {
         const chat = await msg.getChat();
         await chat.sendSeen();
 
-        logger.info(`Mensagem recebida: User (identificado no Whatsapp como ${msg.author} ou ${msg.from}) -> ${msg.body}`);
+        const isGroup = chat.id._serialized.endsWith('@g.us');
+        logger.debug(`Verificação de grupo pelo ID: ${isGroup ? 'É GRUPO' : 'É PRIVADO'}`);
+
+        let groupInfo = '';
+        if (isGroup) {
+            const group = await getOrCreateGroup(chat);
+            groupInfo = ` no grupo "${group.title}" (${chat.id._serialized})`;
+            logger.info(`Processando mensagem no grupo: ${group.title}`);
+        }
+
+        usuario = await getOrCreateUser(msg.author);
+        logger.info(`Mensagem recebida: (${usuario.name}, ${groupInfo}) -> ${msg.body}`);
 
         const chatId = chat.id._serialized;
-
-        // Verifica se é um comando
         const isCommand = msg.body.startsWith('!');
 
-        if (chat.isGroup && !isCommand) {
-            const shouldRespond = await shouldRespondInGroup(msg, chat);
-            if (!shouldRespond && !msg.hasMedia) return;
+        if (isCommand) {
+            logger.info("Processando comando...");
+            await handleCommand(msg, chatId);
+            return;
         }
 
-        if (isCommand) {
-            logger.info(`Comando detectado: ${msg.body}`);
-            await handleCommand(msg, chatId);
-        } else if (msg.hasMedia) {
+        if (msg.hasMedia) {
+            logger.info("Processando mídia...");
             const attachmentData = await msg.downloadMedia();
-            if (attachmentData.mimetype === 'audio/ogg; codecs=opus' || 
-                attachmentData.mimetype.startsWith('audio/')) {
+            if (!attachmentData || !attachmentData.data) {
+                logger.error('Não foi possível obter dados de mídia.');
+                // await msg.reply('Desculpe, não consegui processar esta mídia.');
+                return;
+            }
+
+            // Função para inferir mime type do vídeo, caso não seja fornecido
+            function inferVideoMimeType(buffer) {
+                if (!buffer || buffer.length < 12) {
+                    return 'application/octet-stream';
+                }
+                const hexBytes = buffer.slice(0, 12).toString('hex').toLowerCase();
+                if (hexBytes.includes('66747970')) {
+                    return 'video/mp4';
+                }
+                if (hexBytes.startsWith('1a45dfa3')) {
+                    return 'video/webm';
+                }
+                if (hexBytes.startsWith('52494646')) {
+                    return 'video/avi';
+                }
+                if (hexBytes.startsWith('3026b275')) {
+                    return 'video/x-ms-wmv';
+                }
+                return 'application/octet-stream';
+            }
+
+            if (!attachmentData.mimetype) {
+                const buffer = Buffer.from(attachmentData.data, 'base64');
+                const mime = inferVideoMimeType(buffer);
+                logger.info(`MIME inferido: ${mime}`);
+                attachmentData.mimetype = mime;
+            }
+
+            if (attachmentData.mimetype.startsWith('audio/')) {
                 await handleAudioMessage(msg, attachmentData, chatId);
+                return;
             } else if (attachmentData.mimetype.startsWith('image/')) {
                 await handleImageMessage(msg, attachmentData, chatId);
+                return;
+            } else if (attachmentData.mimetype.startsWith('video/')) {
+                await handleVideoMessage(msg, attachmentData, chatId);
+                return;
             } else {
-                await msg.reply('Desculpe, no momento só posso processar áudios e imagens.');
+                logger.info('Tipo de mídia não suportado.');
+                return;
             }
-        } else {
-            await handleTextMessage(msg);
         }
+
+        if (isGroup) {
+            logger.debug("Verificando regras do grupo...");
+            const shouldRespond = await shouldRespondInGroup(msg, chat);
+            if (!shouldRespond) {
+                logger.debug("Mensagem não atende critérios de resposta do grupo");
+                return;
+            }
+            logger.debug("Respondendo à mensagem do grupo...");
+        } else {
+            logger.debug("Respondendo à mensagem privada...");
+        }
+
+        await handleTextMessage(msg);
 
     } catch (error) {
         logger.error(`Erro ao processar mensagem: ${error.message}`, { error });
         await msg.reply('Desculpe, ocorreu um erro inesperado. Por favor, tente novamente mais tarde.');
+    }
+});
+
+const helpText = `Olá! Eu sou a Amélie, uma assistente de AI multimídia acessível e integrada ao WhatsApp.
+
+Minha idealizadora é a Belle Utsch. Quer conhecê-la? Clica aqui: https://beacons.ai/belleutsch
+
+
+
+
+Comandos disponíveis:\n 
+!reset - Limpa o histórico de conversa, restaura todas as configurações
+         originais e desativa o modo cego\n 
+!prompt set <nome> <texto> - Define uma nova personalidade\n 
+!prompt get <nome> - Mostra uma personalidade existente\n 
+!prompt list - Lista todas as personalidades\n 
+!prompt use <nome> - Usa uma personalidade específica\n 
+!prompt clear - Remove a personalidade ativa\n 
+!config set <param> <valor> - Define um parâmetro de configuração\n 
+!config get [param] - Mostra a configuração atual\n 
+!users - Lista os usuários do grupo\n 
+!cego - Aplica configurações para usuários com deficiência visual\n 
+!help - Mostra esta mensagem de ajuda`;
+
+client.on('group_join', async (notification) => {
+    if (notification.recipientIds.includes(client.info.wid._serialized)) {
+        const chat = await notification.getChat();
+        const group = await getOrCreateGroup(chat);
+
+        await chat.sendMessage('Olá a todos! Estou aqui para ajudar. Aqui estão alguns comandos que vocês podem usar:');
+        await chat.sendMessage(helpText);
+        logger.info(`Bot foi adicionado ao grupo "${group.title}" (${chat.id._serialized}) e enviou a saudação.`);
     }
 });
 
@@ -136,31 +259,45 @@ async function calculateAverageMessageLength(chatId) {
             reject(err);
           } else {
             const totalLength = messages.reduce((sum, msg) => sum + msg.content.length, 0);
-            const averageLength = messages.length > 0 ? Math.round(totalLength / messages.length) : 100; // Default to 100 if no messages
+            const averageLength = messages.length > 0 ? Math.round(totalLength / messages.length) : 100;
             resolve(averageLength);
           }
         });
     });
-  }
+}
 
-  async function shouldRespondInGroup(msg, chat) {
+async function shouldRespondInGroup(msg, chat) {
     if (msg.body.startsWith('!')) {
+        logger.info("Vou responder porque é um comando")
         return true;
     }
 
     const mentions = await msg.getMentions();
-    const isBotMentioned = mentions.some(mention => mention.id._serialized === client.info.wid._serialized);
-
-    let isReplyToBot = false;
-    if (msg.hasQuotedMsg) {
-        const quotedMsg = await msg.getQuotedMessage();
-        isReplyToBot = quotedMsg.fromMe;
+    const isBotMentioned = mentions.some(mention => 
+        mention.id._serialized === client.info.wid._serialized
+    );
+    if (isBotMentioned) {
+        logger.info("Vou responder porque a bot foi mencionada")
+        return true;
     }
 
-    const isBotNameMentioned = msg.body.toLowerCase().includes(bot_name.toLowerCase());
+    if (msg.hasQuotedMsg) {
+        const quotedMsg = await msg.getQuotedMessage();
+        if (quotedMsg.fromMe) {
+            logger.info("Vou responder porque é uma resposta à bot")
+            return true;
+        }
+    }
 
-    // Para mensagens que não são comandos, mantém a lógica original
-    return isBotMentioned || isReplyToBot || isBotNameMentioned;
+    const messageLowerCase = msg.body.toLowerCase();
+    const botNameLowerCase = bot_name.toLowerCase();
+    if (messageLowerCase.includes(botNameLowerCase)) {
+        logger.info("Vou responder porque mencionaram meu nome")
+        return true;
+    }
+
+    logger.info("Não é nenhum caso especial e não vou responder")
+    return false;
 }
 
 async function handleCommand(msg, chatId) {
@@ -171,38 +308,20 @@ async function handleCommand(msg, chatId) {
         switch (command.toLowerCase()) {
             case 'reset':
                 await resetHistory(chatId);
-                await msg.reply('🤖 Histórico resetado para este chat');
+                await resetConfig(chatId);
+                await clearActiveSystemPrompt(chatId);
+                await msg.reply('Histórico e configurações resetados para este chat. As transcrições de áudio e imagem foram habilitadas, e os prompts especiais foram desativados.');
                 break;
             case 'help':
-                await msg.reply(
-`Comandos disponíveis:\n 
-!reset - Limpa o histórico de conversa\n 
-!prompt set <nome> <texto> - Define uma nova System Instruction\n 
-!prompt get <nome> - Mostra uma System Instruction existente\n 
-!prompt list - Lista todas as System Instructions\n 
-!prompt use <nome> - Usa uma System Instruction específica\n 
-!prompt clear - Remove a System Instruction ativa\n 
-!config set <param> <valor> - Define um parâmetro de configuração\n 
-!config get [param] - Mostra a configuração atual\n 
-!users - Lista os usuários do grupo\n 
-!cego - Aplica configurações para usuários com deficiência visual\n 
-!help - Mostra esta mensagem de ajuda`
-                );
-                break;
-            case 'prompt':
-                await handlePromptCommand(msg, args, chatId);
-                break;
-            case 'config':
-                await handleConfigCommand(msg, args, chatId);
-                break;
-            case 'users':
-                await listGroupUsers(msg);
-                break;
-            case 'cego':
-                await handleCegoCommand(msg, chatId);
-                break;
+                await msg.reply(helpText); break;
+            case 'prompt': await handlePromptCommand(msg, args, chatId); break;
+            case 'config': await handleConfigCommand(msg, args, chatId); break;
+            case 'users':  await listGroupUsers(msg); break;
+            case 'cego':   await handleCegoCommand(msg, chatId); break;
             default:
-                await msg.reply('Comando desconhecido. Use !help para ver os comandos disponíveis.');
+                await msg.reply(
+                    'Comando desconhecido. Use !help para ver os comandos disponíveis.'
+                );
         }
     } catch (error) {
         logger.error(`Erro ao executar comando: ${error.message}`, { error });
@@ -211,19 +330,28 @@ async function handleCommand(msg, chatId) {
 }
 
 function removeEmojis(text) {
-    // Esta regex abrange uma ampla gama de emojis, incluindo sequências de emojis compostos
     return text.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1F018}-\u{1F0FF}\u{1F100}-\u{1F2FF}]/gu, '');
+}
+
+function resetConfig(chatId) {
+    return new Promise((resolve, reject) => {
+        configDb.update(
+            { chatId },
+            { $set: defaultConfig },
+            { upsert: true },
+            (err) => {
+                if (err) reject(err);
+                else resolve();
+            }
+        );
+    });
 }
 
 async function handleCegoCommand(msg, chatId) {
     try {
-        // Habilitar descrição de imagens
         await setConfig(chatId, 'mediaImage', true);
-
-        // Desabilitar transcrição de áudio
         await setConfig(chatId, 'mediaAudio', false);
 
-        // Definir e ativar o prompt Audiomar
         const audiomarPrompt = `Você é um chatbot especializado em audiodescrição, projetado para funcionar em um grupo de WhatsApp com mais de 200 pessoas cegas. Sua função principal é descrever imagens e stickers compartilhados no grupo, fornecendo uma audiodescrição profissional, detalhada, didática e polida.
         
         Diretrizes Gerais:
@@ -250,13 +378,12 @@ async function handleCegoCommand(msg, chatId) {
         Descreva texto visível na imagem, incluindo legendas ou títulos.
         Mencione a escala ou tamanho relativo dos objetos quando importante.
         Indique se a imagem é em preto e branco ou colorida.
-Descreva a iluminação se for um elemento significativo da imagem.
-Para obras de arte, inclua informações sobre o estilo artístico e técnicas utilizadas.`;
+        Descreva a iluminação se for um elemento significativo da imagem.
+        Para obras de arte, inclua informações sobre o estilo artístico e técnicas utilizadas.`;
 
         await setSystemPrompt(chatId, 'Audiomar', audiomarPrompt);
         await setActiveSystemPrompt(chatId, 'Audiomar');
 
-        // Confirmar as alterações para o usuário
         await msg.reply('Configurações para usuários com deficiência visual aplicadas com sucesso:\n' +
                         '- Descrição de imagens habilitada\n' +
                         '- Transcrição de áudio desabilitada\n' +
@@ -271,54 +398,126 @@ Para obras de arte, inclua informações sobre o estilo artístico e técnicas u
 
 async function handleTextMessage(msg) {
     try {
-      const chat = await msg.getChat();
-      const chatId = chat.id._serialized;
-      const sender = msg.author || msg.from;
-  
-      const user = await getOrCreateUser(sender, chat);
-      const chatConfig = await getConfig(chatId);
-  
-      await updateMessageHistory(chatId, user.name, msg.body);
-  
-      const history = await getMessageHistory(chatId);
-      const userPromptText = `Histórico de chat: (formato: nome do usuário e em seguida mensagem; responda à última mensagem)\n\n${history.join('\n')}`;
-  
-      logger.debug(`Gerando resposta para: ${userPromptText}`);
-      const response = await generateResponseWithText(userPromptText, chatId);
-      logger.debug(`Resposta gerada (sem emojis): ${response}`);
-  
-      await updateMessageHistory(chatId, chatConfig.botName, response, true);
-      await sendMessage(msg, response);
-    } catch (error) {
-      logger.error(`Erro ao processar mensagem de texto: ${error.message}`);
-      await msg.reply('Desculpe, ocorreu um erro ao processar sua mensagem. Por favor, tente novamente.');
-    }
-}  
+        const chat = await msg.getChat();
+        const chatId = chat.id._serialized;
+        const sender = msg.author || msg.from;
 
-async function getOrCreateUser(sender, chat) {
+        const user = await getOrCreateUser(sender, chat);
+        const chatConfig = await getConfig(chatId);
+
+        let imageData = null;
+        let userPromptText = msg.body;
+
+        if (msg.hasQuotedMsg) {
+            const quotedMsg = await msg.getQuotedMessage();
+            if (quotedMsg.hasMedia) {
+                const media = await quotedMsg.downloadMedia();
+                if (media && media.mimetype.startsWith('image/')) {
+                    imageData = media;
+                }
+            }
+        }
+
+        if (imageData) {
+            await updateMessageHistory(chatId, user.name, `[Imagem citada] ${userPromptText}`);
+
+            const response = await generateResponseWithTextAndImage(userPromptText, imageData, chatId);
+
+            await updateMessageHistory(chatId, chatConfig.botName, response, true);
+            await sendMessage(msg, response);
+        } else {
+            await updateMessageHistory(chatId, user.name, msg.body);
+
+            const history = await getMessageHistory(chatId);
+            const historyText = `Histórico de chat: (formato: nome do usuário e em seguida mensagem; responda à última mensagem)\n\n${history.join('\n')}`;
+
+            const response = await generateResponseWithText(historyText, chatId);
+
+            await updateMessageHistory(chatId, chatConfig.botName, response, true);
+            await sendMessage(msg, response);
+        }
+    } catch (error) {
+        logger.error(`Erro ao processar mensagem de texto: ${error.message}`);
+        await msg.reply('Desculpe, ocorreu um erro ao processar sua mensagem. Por favor, tente novamente.');
+    }
+}
+
+async function generateResponseWithTextAndImage(userPrompt, imageData, chatId) {
+    try {
+        const userConfig = await getConfig(chatId);
+
+        const imagePart = {
+            inlineData: {
+                data: imageData.data.toString('base64'),
+                mimeType: imageData.mimetype
+            }
+        };
+
+        const contentParts = [
+            imagePart,
+            { text: userPrompt }
+        ];
+
+        const model = genAI.getGenerativeModel({
+            model: "gemini-2.0-flash",
+            generationConfig: {
+                temperature: userConfig.temperature,
+                topK: userConfig.topK,
+                topP: userConfig.topP,
+                maxOutputTokens: userConfig.maxOutputTokens,
+            },
+            safetySettings: [
+                { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+            ],
+            systemInstruction: userConfig.systemInstructions
+        });
+
+        const result = await model.generateContent(contentParts);
+        let responseText = result.response.text();
+
+        if (!responseText) {
+            throw new Error('Resposta vazia gerada pelo modelo');
+        }
+
+        responseText = removeEmojis(responseText);
+
+        return responseText;
+    } catch (error) {
+        console.error(`Erro ao gerar resposta com texto e imagem: ${error.message}`);
+        return "Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente ou reformule sua pergunta.";
+    }
+}
+
+async function getOrCreateGroup(chat) {
     return new Promise((resolve, reject) => {
-        usersDb.findOne({ id: sender }, async (err, user) => {
+        const groupId = chat.id._serialized;
+        groupsDb.findOne({ id: groupId }, async (err, group) => {
             if (err) {
                 reject(err);
-            } else if (user) {
-                resolve(user);
+            } else if (group) {
+                if (group.title !== chat.name) {
+                    groupsDb.update(
+                        { id: groupId }, 
+                        { $set: { title: chat.name } }, 
+                        {}, 
+                        (err) => {
+                        if (err) logger.error(
+                            `Erro ao atualizar título do grupo ${groupId}: ${err.message}`
+                        );
+                    });
+                }
+                resolve(group);
             } else {
                 try {
-                    let contact;
-                    if (chat.isGroup) {
-                        const participants = await chat.participants;
-                        contact = participants.find(p => p.id._serialized === sender);
-                    } else {
-                        contact = await chat.getContact();
-                    }
-                    
-                    const newUser = {
-                        id: sender,
-                        name: contact.pushname || contact.name || `User${sender.substring(0, 12)}`,
-                        joinedAt: new Date()
+                    const newGroup = {
+                        id: groupId,
+                        title: chat.name || `Grupo_${groupId.substring(0, 6)}`,
+                        createdAt: new Date()
                     };
-                    
-                    usersDb.insert(newUser, (err, doc) => {
+                    groupsDb.insert(newGroup, (err, doc) => {
                         if (err) reject(err);
                         else resolve(doc);
                     });
@@ -330,16 +529,59 @@ async function getOrCreateUser(sender, chat) {
     });
 }
 
+async function getOrCreateUser(sender, chat) {
+    return new Promise((resolve, reject) => {
+        usersDb.findOne({ id: sender }, async (err, user) => {
+            if (err) {
+                reject(err);
+            } else if (user) {
+                resolve(user);
+            } else {
+                try {
+                    const contact = await client.getContactById(sender);
+                    
+                    let name = contact.pushname || contact.name || contact.shortName;
+                    
+                    if (!name || name.trim() === '') {
+                        const idSuffix = sender;
+                        name = `User${idSuffix}`;
+                    }
+
+                    const newUser = {
+                        id: sender,
+                        name: name,
+                        joinedAt: new Date()
+                    };
+                    
+                    usersDb.insert(newUser, (err, doc) => {
+                        if (err) reject(err);
+                        else resolve(doc);
+                    });
+                } catch (error) {
+                    const idSuffix = sender;
+                    const newUser = {
+                        id: sender,
+                        name: `User${idSuffix}`,
+                        joinedAt: new Date()
+                    };
+                    usersDb.insert(newUser, (err, doc) => {
+                        if (err) reject(err);
+                        else resolve(doc);
+                    });
+                }
+            }
+        });
+    });
+}
+
 async function handleAudioMessage(msg, audioData, chatId) {
     try {
-        // Verifica se a transcrição de áudio está habilitada para este chat
         const config = await getConfig(chatId);
         if (!config.mediaAudio) {
             logger.info(`Transcrição de áudio desabilitada para o chat ${chatId}. Ignorando mensagem de áudio.`);
-            return; // Sai da função sem processar o áudio
+            return;
         }
 
-        // Verifica se o áudio é menor ou igual a 20MB
         const audioSizeInMB = audioData.data.length / (1024 * 1024);
         if (audioSizeInMB > 20) {
             await msg.reply('Desculpe, só posso processar áudios de até 20MB.');
@@ -347,20 +589,22 @@ async function handleAudioMessage(msg, audioData, chatId) {
         }
 
         const isPTT = audioData.mimetype === 'audio/ogg; codecs=opus';
-        
         logger.info(`Processando arquivo de áudio: ${isPTT ? 'PTT' : 'Áudio regular'}`);
 
-        // Converte o buffer de áudio para base64
-        const base64AudioFile = audioData.data.toString('base64');
+        const audioHash = crypto.createHash('md5').update(audioData.data).digest('hex');
+        if (lastProcessedAudio === audioHash) {
+            await msg.reply('Este áudio já foi processado recentemente. Por favor, envie um novo áudio.');
+            return;
+        }
+        lastProcessedAudio = audioHash;
 
-        // Obtém a configuração do usuário, incluindo as system instructions
+        const base64AudioFile = audioData.data.toString('base64');
         const userConfig = await getConfig(chatId);
 
-        // Cria uma instância do modelo com as system instructions
         const modelWithInstructions = genAI.getGenerativeModel({
-            model: "gemini-1.5-flash",
+            model: "gemini-2.0-flash",
             generationConfig: {
-                temperature: userConfig.temperature,
+                temperature: 0.3,
                 topK: userConfig.topK,
                 topP: userConfig.topP,
                 maxOutputTokens: userConfig.maxOutputTokens,
@@ -368,17 +612,12 @@ async function handleAudioMessage(msg, audioData, chatId) {
             safetySettings: [
                 { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
                 { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
                 { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
             ],
-            systemInstruction: userConfig.systemInstructions
+            systemInstruction: userConfig.systemInstructions + "\nFoque apenas no áudio mais recente. Transcreva e resuma seu conteúdo em português."
         });
 
-        // Obtém o histórico de mensagens
-        const history = await getMessageHistory(chatId);
-        const historyPrompt = history.join('\n');
-
-        // Prepara o conteúdo para geração
         const contentParts = [
             {
                 inlineData: {
@@ -386,18 +625,17 @@ async function handleAudioMessage(msg, audioData, chatId) {
                     data: base64AudioFile
                 }
             },
-            { text: `Histórico da conversa:\n${historyPrompt}\n\nAgora, considerando este histórico e o áudio fornecido, por favor, transcreva o áudio e depois resuma o conteúdo em português.` }
+            { text: `Transcreva o áudio com ID ${audioHash} e resuma seu conteúdo em português. Ignore qualquer contexto anterior.` }
         ];
 
-        // Gera o conteúdo usando o modelo
         const result = await modelWithInstructions.generateContent(contentParts);
-        const response = await result.response.text();
+        const response = result.response.text();
 
         await sendMessage(msg, response);
-
-        // Atualizar o histórico de mensagens
-        await updateMessageHistory(chatId, msg.author || msg.from, '[Áudio]', false);
+        await updateMessageHistory(chatId, msg.author || msg.from, `[Áudio ${audioHash}]`, false);
         await updateMessageHistory(chatId, userConfig.botName, response, true);
+
+        logger.info(`Áudio processado com sucesso: ${audioHash}`);
 
     } catch (error) {
         logger.error(`Erro ao processar mensagem de áudio: ${error.message}`, { error });
@@ -407,16 +645,13 @@ async function handleAudioMessage(msg, audioData, chatId) {
 
 async function handleImageMessage(msg, imageData, chatId) {
     try {
-        // Verifica se a descrição de imagem está habilitada para este chat
         const config = await getConfig(chatId);
         if (!config.mediaImage) {
             logger.info(`Descrição de imagem desabilitada para o chat ${chatId}. Ignorando mensagem de imagem.`);
-            return; // Sai da função sem processar a imagem
+            return;
         }
 
         let userPrompt = "Descreva esta imagem em detalhes, focando apenas no que você vê com certeza. Se não tiver certeza sobre algo, não mencione.";
-        
-        // Verifica se há uma mensagem de texto junto com a imagem
         if (msg.body && msg.body.trim() !== '') {
             userPrompt = msg.body.trim();
         }
@@ -428,18 +663,14 @@ async function handleImageMessage(msg, imageData, chatId) {
             }
         };
 
-        // Obtém a configuração do usuário, incluindo as system instructions
         const userConfig = await getConfig(chatId);
-
-        // Obtém o histórico de mensagens, mas limita a um número menor de mensagens recentes
-        const history = await getMessageHistory(chatId, 5); // Limita a 5 mensagens recentes
+        const history = await getMessageHistory(chatId, 5);
         const historyPrompt = history.join('\n');
 
-        // Cria uma instância do modelo com as system instructions e temperatura específica para imagens
         const modelWithInstructions = genAI.getGenerativeModel({
-            model: "gemini-1.5-flash",
+            model: "gemini-2.0-flash",
             generationConfig: {
-                temperature: 0.2, // Temperatura específica para interpretação de imagens
+                temperature: 0.5,
                 topK: userConfig.topK,
                 topP: userConfig.topP,
                 maxOutputTokens: userConfig.maxOutputTokens,
@@ -447,7 +678,7 @@ async function handleImageMessage(msg, imageData, chatId) {
             safetySettings: [
                 { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
                 { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
                 { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
             ],
             systemInstruction: userConfig.systemInstructions + "\nFoque apenas na imagem mais recente. Descreva apenas o que você vê com certeza. Evite fazer suposições ou inferências além do que é claramente visível na imagem."
@@ -459,11 +690,9 @@ async function handleImageMessage(msg, imageData, chatId) {
         ];
 
         const result = await modelWithInstructions.generateContent(contentParts);
-
         const response = await result.response.text();
         await sendMessage(msg, response);
 
-        // Atualizar o histórico de mensagens
         await updateMessageHistory(chatId, msg.author || msg.from, `[Imagem] ${userPrompt}`, false);
         await updateMessageHistory(chatId, userConfig.botName, response, true);
 
@@ -473,11 +702,80 @@ async function handleImageMessage(msg, imageData, chatId) {
     }
 }
 
+async function handleVideoMessage(msg, videoData, chatId) {
+    try {
+        const config = await getConfig(chatId);
+        if (!config.mediaVideo) {
+            logger.info(`Descrição de vídeo desabilitada para o chat ${chatId}. Ignorando mensagem de vídeo.`);
+            return;
+        }
+
+        let userPrompt = "Descreva detalhadamente o conteúdo deste vídeo. Foque em informações visuais, áudio, e contexto geral.";
+        if (msg.body && msg.body.trim() !== '') {
+            userPrompt = msg.body.trim();
+        }
+
+        // Cria um arquivo temporário para o vídeo
+        const tempFilename = `video_${Date.now()}.mp4`;
+        fs.writeFileSync(tempFilename, Buffer.from(videoData.data, 'base64'));
+
+        const uploadResponse = await fileManager.uploadFile(tempFilename, {
+            mimeType: videoData.mimetype,
+            displayName: "Vídeo Enviado"
+        });
+
+        fs.unlinkSync(tempFilename);
+
+        let file = await fileManager.getFile(uploadResponse.file.name);
+        while (file.state === "PROCESSING") {
+            logger.info("Processando vídeo, aguardando 10s...");
+            await new Promise((resolve) => setTimeout(resolve, 10000));
+            file = await fileManager.getFile(uploadResponse.file.name);
+        }
+
+        if (file.state === "FAILED") {
+            await msg.reply("Desculpe, ocorreu um erro ao processar o vídeo.");
+            return;
+        }
+
+        const userConfig = await getConfig(chatId);
+
+        const contentParts = [
+            {
+              fileData: {
+                mimeType: file.mimeType,
+                fileUri: file.uri
+              }
+            },
+            {
+              text: userConfig.systemInstructions 
+                    + "\nFoque apenas neste vídeo. Descreva seu conteúdo de forma clara e detalhada.\n"
+                    + userPrompt
+            }
+        ];
+
+        const result = await model.generateContent(contentParts);
+        let response = result.response.text();
+        if (!response || typeof response !== 'string' || response.trim() === '') {
+            response = "Não consegui gerar uma descrição para este vídeo.";
+        }
+
+        await sendMessage(msg, response);
+        await updateMessageHistory(chatId, msg.author || msg.from, `[Vídeo] ${userPrompt}`, false);
+        await updateMessageHistory(chatId, userConfig.botName, response, true);
+
+        logger.info("Vídeo processado com sucesso!");
+    } catch (error) {
+        logger.error(`Erro ao processar mensagem de vídeo: ${error.message}`, { error });
+        await msg.reply('Desculpe, ocorreu um erro ao processar o vídeo. Por favor, tente novamente.');
+    }
+}
+
 async function generateResponseWithText(userPrompt, chatId) {
     try {
       const userConfig = await getConfig(chatId);
       const model = genAI.getGenerativeModel({
-        model: "gemini-1.5-flash",
+        model: "gemini-2.0-flash",
         generationConfig: {
           temperature: userConfig.temperature,
           topK: userConfig.topK,
@@ -487,7 +785,7 @@ async function generateResponseWithText(userPrompt, chatId) {
         safetySettings: [
           { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
           { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+          { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
           { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
         ],
         systemInstruction: userConfig.systemInstructions
@@ -507,7 +805,7 @@ async function generateResponseWithText(userPrompt, chatId) {
       console.error(`Erro ao gerar resposta de texto: ${error.message}`);
       return "Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente ou reformule sua pergunta.";
     }
-  }
+}
 
 function getMessageHistory(chatId, limit = MAX_HISTORY) {
     return new Promise((resolve, reject) => {
@@ -541,12 +839,14 @@ async function loadConfigOnStartup() {
 async function listGroupUsers(msg) {
     const chat = await msg.getChat();
     if (chat.isGroup) {
+        const group = await getOrCreateGroup(chat);
+
         const participants = await chat.participants;
         const userList = await Promise.all(participants.map(async (p) => {
             const user = await getOrCreateUser(p.id._serialized, chat);
             return `${user.name} (${p.id.user})`;
         }));
-        await msg.reply(`Usuários no grupo:\n${userList.join('\n')}`);
+        await msg.reply(`Usuários no grupo "${group.title}":\n${userList.join('\n')}`);
     } else {
         await msg.reply('Este comando só funciona em grupos.');
     }
@@ -561,11 +861,11 @@ async function initializeBot() {
     }
 }
 
-function updateMessageHistory(chatId, sender, message, isBot = false) {
+function updateMessageHistory(chatId, senderName, message, isBot = false) {
     return new Promise((resolve, reject) => {
         messagesDb.insert({
             chatId,
-            sender,
+            sender: senderName,
             content: message,
             timestamp: Date.now(),
             type: isBot ? 'bot' : 'user'
@@ -606,7 +906,6 @@ async function handlePromptCommand(msg, args, chatId) {
             if (name && rest.length > 0) {
                 const promptText = rest.join(' ');
                 await setSystemPrompt(chatId, name, promptText);
-                //await clearChatOnInstructionChange(chatId);
                 await msg.reply(`System Instruction "${name}" definida com sucesso. O histórico do chat foi limpo.`);
             } else {
                 await msg.reply('Uso correto: !prompt set <nome> <texto>');
@@ -623,7 +922,8 @@ async function handlePromptCommand(msg, args, chatId) {
             } else {
                 await msg.reply('Uso correto: !prompt get <nome>');
             }
-            case 'list':
+            break;
+        case 'list':
             const prompts = await listSystemPrompts(chatId);
             if (prompts.length > 0) {
                 const promptList = prompts.map(p => p.name).join(', ');
@@ -660,13 +960,13 @@ async function handleConfigCommand(msg, args, chatId) {
     switch (subcommand) {
         case 'set':
             if (param && value) {
-                if (['temperature', 'topK', 'topP', 'maxOutputTokens'].includes(param)) {
-                    const numValue = parseFloat(value);
-                    if (!isNaN(numValue)) {
+                if (['temperature', 'topK', 'topP', 'maxOutputTokens', 'mediaImage', 'mediaAudio', 'mediaVideo'].includes(param)) {
+                    const numValue = (param.startsWith('media')) ? (value === 'true') : parseFloat(value);
+                    if (!isNaN(numValue) || typeof numValue === 'boolean') {
                         await setConfig(chatId, param, numValue);
                         await msg.reply(`Parâmetro ${param} definido como ${numValue}`);
                     } else {
-                        await msg.reply(`Valor inválido para ${param}. Use um número.`);
+                        await msg.reply(`Valor inválido para ${param}. Use um número ou "true"/"false" se for mídia.`);
                     }
                 } else {
                     await msg.reply(`Parâmetro desconhecido: ${param}`);
@@ -695,7 +995,6 @@ async function handleConfigCommand(msg, args, chatId) {
     }
 }
 
-// Modifique a função setSystemPrompt
 function setSystemPrompt(chatId, name, text) {
     return new Promise((resolve, reject) => {
         const formattedText = `Seu nome é ${name}. ${text}`;
@@ -729,8 +1028,6 @@ async function setActiveSystemPrompt(chatId, promptName) {
         const prompt = await getSystemPrompt(chatId, promptName);
         if (prompt) {
             await setConfig(chatId, 'activePrompt', promptName);
-            // Remova a atribuição global de bot_name
-            // bot_name = promptName
             logger.debug(`Active prompt set for chat ${chatId}: ${promptName}`);
             return true;
         }
@@ -739,15 +1036,6 @@ async function setActiveSystemPrompt(chatId, promptName) {
         logger.error(`Erro ao definir System Instruction ativa: ${error.message}`, { error });
         return false;
     }
-}
-
-async function clearChatOnInstructionChange(chatId) {
-    //try {
-    //    await messagesDb.remove({ chatId: chatId }, { multi: true });
-    //    logger.info(`Chat limpo para ${chatId} devido à mudança nas instruções do sistema`);
-    //} catch (error) {
-    //    logger.error(`Erro ao limpar chat para ${chatId}: ${error.message}`);
-    //}
 }
 
 async function clearActiveSystemPrompt(chatId) {
@@ -816,14 +1104,15 @@ async function sendMessage(msg, text) {
 
         logger.debug('Enviando mensagem:', { text: trimmedText });
         await msg.reply(trimmedText);
-        logger.info('Mensagem enviada com sucesso');
+        logger.info(`Mensagem enviada: ${ trimmedText }`);
     } catch (error) {
         logger.error('Erro ao enviar mensagem:', { 
             error: error.message,
             stack: error.stack,
             text: text
         });
-        await msg.reply('Desculpe, ocorreu um erro ao enviar a resposta. Por favor, tente novamente.');
+        await msg.reply(
+            'Desculpe, ocorreu um erro ao enviar a resposta. Por favor, tente novamente.');
     }
 }
 
@@ -837,6 +1126,7 @@ process.on('uncaughtException', (error) => {
     logger.error(`Uncaught Exception: ${error.message}`, { error });
     process.exit(1);
 });
+
 module.exports = {
     getOrCreateUser,
     updateMessageHistory,
@@ -853,4 +1143,4 @@ module.exports = {
     handleTextMessage,
     handleImageMessage,
     handleAudioMessage,
-  };
+};
