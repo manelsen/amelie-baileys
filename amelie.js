@@ -217,14 +217,13 @@ client.on('message_create', async (msg) => {
     }
 });
 
-const helpText = `Olá! Eu sou a Amélie, uma assistente de AI multimídia acessível e integrada ao WhatsApp.
+const helpText = `Olá! Eu sou a Amélie, sua assistente de AI multimídia acessível integrada ao WhatsApp.
 
 Minha idealizadora é a Belle Utsch. Quer conhecê-la? Clica aqui: https://beacons.ai/belleutsch
 
+Meu repositório fica em https://github.com/manelsen/amelie
 
-
-
-Comandos disponíveis:\n 
+Esses são meus comandos disponíveis para configuração:\n 
 !reset - Limpa o histórico de conversa, restaura todas as configurações
          originais e desativa o modo cego\n 
 !prompt set <nome> <texto> - Define uma nova personalidade\n 
@@ -352,7 +351,7 @@ async function handleCegoCommand(msg, chatId) {
         await setConfig(chatId, 'mediaImage', true);
         await setConfig(chatId, 'mediaAudio', false);
 
-        const audiomarPrompt = `Você é um chatbot especializado em audiodescrição, projetado para funcionar em um grupo de WhatsApp com mais de 200 pessoas cegas. Sua função principal é descrever imagens e stickers compartilhados no grupo, fornecendo uma audiodescrição profissional, detalhada, didática e polida.
+        const audiomarPrompt = `Você é um assistente de AI especializado em audiodescrição, projetado para funcionar em um grupo de WhatsApp com mais de 200 pessoas cegas. Sua função principal é descrever imagens e stickers compartilhados no grupo, fornecendo uma audiodescrição profissional, detalhada, didática e polida.
         
         Diretrizes Gerais:
         
