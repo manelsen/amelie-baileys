@@ -87,8 +87,7 @@ const logger = winston.createLogger({
     ]
 });
 
-// Configuração do NeDB
-const messagesDb = new Datastore({ filename: './db/messages.db', autoload: true });
+// Configuração do NeDB - Removido messagesDb
 const promptsDb  = new Datastore({ filename: './db/prompts.db' , autoload: true });
 const configDb   = new Datastore({ filename: './db/config.db'  , autoload: true });
 const groupsDb   = new Datastore({ filename: './db/groups.db'  , autoload: true });
@@ -185,7 +184,6 @@ const client = new Client({
     puppeteer: {
 	    args: ['--no-sandbox', '--disable-setuid-sandbox']
     }
-    
 });
 
 client.on('qr', qr => {
@@ -327,6 +325,7 @@ Esses são meus comandos disponíveis para configuração:
 !users - Lista os usuários do grupo
 
 !help - Mostra esta mensagem de ajuda`;
+
 client.on('group_join', async (notification) => {
     if (notification.recipientIds.includes(client.info.wid._serialized)) {
         const chat = await notification.getChat();
@@ -337,23 +336,6 @@ client.on('group_join', async (notification) => {
         logger.info(`Bot foi adicionado ao grupo "${group.title}" (${chat.id._serialized}) e enviou a saudação.`);
     }
 });
-
-async function calculateAverageMessageLength(chatId) {
-    return new Promise((resolve, reject) => {
-      messagesDb.find({ chatId: chatId, type: 'user' })
-        .sort({ timestamp: -1 })
-        .limit(10)
-        .exec((err, messages) => {
-          if (err) {
-            reject(err);
-          } else {
-            const totalLength = messages.reduce((sum, msg) => sum + msg.content.length, 0);
-            const averageLength = messages.length > 0 ? Math.round(totalLength / messages.length) : 100;
-            resolve(averageLength);
-          }
-        });
-    });
-}
 
 async function shouldRespondInGroup(msg, chat) {
     if (msg.body.startsWith('!')) {
@@ -380,10 +362,11 @@ async function shouldRespondInGroup(msg, chat) {
 
     const messageLowerCase = msg.body.toLowerCase();
     const botNameLowerCase = bot_name.toLowerCase();
-    if (messageLowerCase.includes(botNameLowerCase)) {
-        logger.debug("Vou responder porque mencionaram meu nome")
-        return true;
-    }
+
+    //if (messageLowerCase.includes(botNameLowerCase)) {
+    //    logger.debug("Vou responder porque mencionaram meu nome")
+    //    return true;
+    //}
 
     logger.debug("Não é nenhum caso especial e não vou responder")
     return false;
@@ -396,10 +379,9 @@ async function handleCommand(msg, chatId) {
     try {
         switch (command.toLowerCase()) {
             case 'reset':
-                await resetHistory(chatId);
                 await resetConfig(chatId);
                 await clearActiveSystemPrompt(chatId);
-                await msg.reply('Histórico e configurações resetados para este chat. As transcrições de áudio e imagem foram habilitadas, e os prompts especiais foram desativados.');
+                await msg.reply('Configurações resetadas para este chat. As transcrições de áudio e imagem foram habilitadas, e os prompts especiais foram desativados.');
                 break;
             case 'help':
                 await msg.reply(helpText); break;
@@ -441,8 +423,6 @@ async function handleMediaToggleCommand(msg, chatId, configParam, featureName) {
         await msg.reply(`Desculpe, ocorreu um erro ao alternar a ${featureName}. Por favor, tente novamente.`);
     }
 }
-
-
 
 function removeEmojis(text) {
     return text.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1F018}-\u{1F0FF}\u{1F100}-\u{1F2FF}]/gu, '');
@@ -511,11 +491,62 @@ async function handleCegoCommand(msg, chatId) {
     }
 }
 
+// Nova função para obter histórico de mensagens diretamente do WhatsApp
+async function getMessageHistory(chatId, limit = MAX_HISTORY) {
+    try {
+        // Obter o objeto de chat pelo ID
+        const chat = await client.getChatById(chatId);
+        
+        // Carregar as mensagens diretamente - o método retorna um array de mensagens
+        const fetchedMessages = await chat.fetchMessages({limit: limit * 2});
+        
+        if (!fetchedMessages || !Array.isArray(fetchedMessages)) {
+            logger.warn(`Não foi possível obter mensagens para o chat ${chatId}`);
+            return [];
+        }
+        
+        // Filtrar e mapear as mensagens
+        const messages = fetchedMessages
+            .filter(msg => msg.body && !msg.body.startsWith('!')) // Filtra comandos
+            .slice(-limit * 2) // Limita ao número de mensagens
+            .map(msg => {
+                const sender = msg.fromMe ? 
+                    (process.env.BOT_NAME || 'Amelie') : 
+                    (msg._data.notifyName || msg.author || 'Usuário');
+                
+                let content = msg.body || '';
+                
+                // Adiciona informação sobre mídia
+                if (msg.hasMedia) {
+                    if (msg.type === 'image') content = `[Imagem] ${content}`;
+                    else if (msg.type === 'audio' || msg.type === 'ptt') content = `[Áudio] ${content}`;
+                    else if (msg.type === 'video') content = `[Vídeo] ${content}`;
+                    else content = `[Mídia] ${content}`;
+                }
+                
+                return `${sender}: ${content}`;
+            });
+        
+        return messages;
+    } catch (error) {
+        logger.error(`Erro ao obter histórico de mensagens do WhatsApp: ${error.message}`, { error });
+        return []; // Retorna array vazio em caso de erro
+    }
+}
+
+// Função vazia para compatibilidade - não armazena mais mensagens
+async function updateMessageHistory(chatId, senderName, message, isBot = false) {
+    // Não faz nada, pois não estamos mais armazenando mensagens
+    logger.debug(`Mensagem processada sem armazenamento: ${senderName}: ${message}`);
+    return Promise.resolve();
+}
+
 async function handleTextMessage(msg) {
     try {
         const chat = await msg.getChat();
         const chatId = chat.id._serialized;
         const sender = msg.author || msg.from;
+        const senderName = sender.name;
 
         const user = await getOrCreateUser(sender, chat);
         const chatConfig = await getConfig(chatId);
@@ -534,21 +565,17 @@ async function handleTextMessage(msg) {
         }
 
         if (imageData) {
-            await updateMessageHistory(chatId, user.name, `[Imagem citada] ${userPromptText}`);
-
             const response = await generateResponseWithTextAndImage(userPromptText, imageData, chatId);
-
-            await updateMessageHistory(chatId, chatConfig.botName, response, true);
             await sendMessage(msg, response);
         } else {
-            await updateMessageHistory(chatId, user.name, msg.body);
-
+            // Obter histórico diretamente do WhatsApp
             const history = await getMessageHistory(chatId);
-            const historyText = `Histórico de chat: (formato: nome do usuário e em seguida mensagem; responda à última mensagem)\n\n${history.join('\n')}`;
+            
+            // Adicionar a mensagem atual ao contexto
+            const currentUserMessage = `${user.name}: ${msg.body}`;
+            const historyText = `Histórico de chat: (formato: nome do usuário e em seguida mensagem; responda à última mensagem)\n\n${history.join('\n')}\n${currentUserMessage}`;
 
             const response = await generateResponseWithText(historyText, chatId);
-
-            await updateMessageHistory(chatId, chatConfig.botName, response, true);
             await sendMessage(msg, response);
         }
     } catch (error) {
@@ -731,11 +758,9 @@ async function handleAudioMessage(msg, audioData, chatId) {
         const response = result.response.text();
 
         await sendMessage(msg, response);
-        await updateMessageHistory(chatId, msg.author || msg.from, `[Áudio ${audioHash}]`, false);
-        await updateMessageHistory(chatId, userConfig.botName, response, true);
+        // Não é mais necessário armazenar no messagesDb
 
         logger.info(`Áudio processado com sucesso: ${audioHash}`);
-
     } catch (error) {
         logger.error(`Erro ao processar mensagem de áudio: ${error.message}`, { error });
         await msg.reply('Desculpe, ocorreu um erro ao processar o áudio. Por favor, tente novamente.');
@@ -784,9 +809,7 @@ async function handleImageMessage(msg, imageData, chatId) {
         const response = await result.response.text();
         await sendMessage(msg, response);
 
-        await updateMessageHistory(chatId, msg.author || msg.from, `[Imagem] ${userPrompt}`, false);
-        await updateMessageHistory(chatId, userConfig.botName, response, true);
-
+        // Não é mais necessário armazenar no messagesDb
     } catch (error) {
         logger.error(`Erro ao processar mensagem de imagem: ${error.message}`, { error });
         await msg.reply('Desculpe, ocorreu um erro ao processar a imagem. Por favor, tente novamente.');
@@ -861,8 +884,7 @@ async function handleVideoMessage(msg, videoData, chatId) {
         }
 
         await sendMessage(msg, response);
-        await updateMessageHistory(chatId, msg.author || msg.from, `[Vídeo] ${userPrompt}`, false);
-        await updateMessageHistory(chatId, userConfig.botName, response, true);
+        // Não é mais necessário armazenar no messagesDb
 
         logger.info("Vídeo processado com sucesso!");
     } catch (error) {
@@ -897,18 +919,6 @@ async function generateResponseWithText(userPrompt, chatId) {
       console.error(`Erro ao gerar resposta de texto: ${error.message}`);
       return "Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente ou reformule sua pergunta.";
     }
-}
-
-function getMessageHistory(chatId, limit = MAX_HISTORY) {
-    return new Promise((resolve, reject) => {
-        messagesDb.find({ chatId: chatId, type: { $in: ['user', 'bot'] } })
-            .sort({ timestamp: -1 })
-            .limit(limit * 2)
-            .exec((err, docs) => {
-                if (err) reject(err);
-                else resolve(docs.reverse().map(doc => `${doc.sender}: ${doc.content}`));
-            });
-    });
 }
 
 async function loadConfigOnStartup() {
@@ -953,41 +963,10 @@ async function initializeBot() {
     }
 }
 
-function updateMessageHistory(chatId, senderName, message, isBot = false) {
-    return new Promise((resolve, reject) => {
-        messagesDb.insert({
-            chatId,
-            sender: senderName,
-            content: message,
-            timestamp: Date.now(),
-            type: isBot ? 'bot' : 'user'
-        }, (err) => {
-            if (err) reject(err);
-            else {
-                messagesDb.find({ chatId: chatId, type: { $in: ['user', 'bot'] } })
-                    .sort({ timestamp: -1 })
-                    .skip(MAX_HISTORY * 2)
-                    .exec((err, docsToRemove) => {
-                        if (err) reject(err);
-                        else {
-                            messagesDb.remove({ _id: { $in: docsToRemove.map(doc => doc._id) } }, { multi: true }, (err) => {
-                                if (err) reject(err);
-                                else resolve();
-                            });
-                        }
-                    });
-            }
-        });
-    });
-}
-
+// Função simplificada para resetHistory - não faz nada pois não temos mais armazenamento
 function resetHistory(chatId) {
-    return new Promise((resolve, reject) => {
-        messagesDb.remove({ chatId: chatId, type: { $in: ['user', 'bot'] } }, { multi: true }, (err) => {
-            if (err) reject(err);
-            else resolve();
-        });
-    });
+    logger.info(`Solicitação para resetar histórico do chat ${chatId} - Sem ação necessária devido à nova abordagem LGPD`);
+    return Promise.resolve();
 }
 
 async function handlePromptCommand(msg, args, chatId) {
@@ -998,7 +977,7 @@ async function handlePromptCommand(msg, args, chatId) {
             if (name && rest.length > 0) {
                 const promptText = rest.join(' ');
                 await setSystemPrompt(chatId, name, promptText);
-                await msg.reply(`System Instruction "${name}" definida com sucesso. O histórico do chat foi limpo.`);
+                await msg.reply(`System Instruction "${name}" definida com sucesso.`);
             } else {
                 await msg.reply('Uso correto: !prompt set <nome> <texto>');
             }
@@ -1202,7 +1181,7 @@ async function sendMessage(msg, text) {
         const senderName = sender.name;
         
         // Preparar o texto de log
-        let logPrefix = `Mensagem de ${senderName}`;
+        let logPrefix = `\nMensagem de ${senderName}`;
         
         // Adicionar informação do grupo, se aplicável
         if (isGroup) {
