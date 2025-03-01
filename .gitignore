@@ -7,7 +7,6 @@ temp_*
 .wwebjs_auth/
 .wwebjs_cache/
 *db
-gulpfile.js
 logs/*
 *.mp4
-amelie_pre_lgpd.js
+backup*
