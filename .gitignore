@@ -9,3 +9,4 @@ temp_*
 *db
 gulpfile.js
 logs/*
+*.mp4

@@ -4,6 +4,7 @@ const { GoogleGenerativeAI }  = require("@google/generative-ai");
 const { GoogleAIFileManager } = require("@google/generative-ai/server");
 const dotenv                  = require('dotenv');
 const winston                 = require('winston');
+const colors                  = require('colors/safe');
 const Datastore               = require('nedb');
 const crypto                  = require('crypto');
 const fs                      = require('fs');
@@ -40,22 +41,49 @@ function getStackInfo() {
 const myFormat = winston.format.printf(({ timestamp, level, message, ...rest }) => {
     const lineInfo = getStackInfo();
     const extraData = Object.keys(rest).length ? JSON.stringify(rest, null, 2) : '';
-    return `${timestamp} [${level}] ${lineInfo}: ${message} ${extraData}`;
+    
+    // Usar expressões regulares para colorir apenas partes específicas
+    let coloredMessage = message;
+    
+    // Colorir apenas "Mensagem de [nome]" em verde
+    coloredMessage = coloredMessage.replace(
+        /(Mensagem de [^:]+):/g, 
+        match => colors.green(match)
+    );
+    
+    // Colorir apenas "Resposta:" em azul
+    coloredMessage = coloredMessage.replace(
+        /\b(Resposta):/g, 
+        match => colors.blue(match)
+    );
+    
+    return `${timestamp} [${colors.yellow(level)}]: ${coloredMessage} ${extraData}`;
 });
 
 const logger = winston.createLogger({
     level: 'info',
-    format: winston
-    .format
-    .combine(
-        winston
-        .format
-        .timestamp(),
+    format: winston.format.combine(
+        winston.format.timestamp(),
         myFormat
     ),
     transports: [
-        new winston.transports.Console(),
-        new winston.transports.File({ filename: 'bot.log' })
+        new winston.transports.Console({
+            format: winston.format.combine(
+                winston.format.timestamp(),
+                myFormat
+            )
+        }),
+        new winston.transports.File({ 
+            filename: 'bot.log',
+            format: winston.format.combine(
+                winston.format.timestamp(),
+                winston.format.uncolorize(), // Remove cores para o arquivo de log
+                winston.format.printf(({ timestamp, level, message, ...rest }) => {
+                    const extraData = Object.keys(rest).length ? JSON.stringify(rest, null, 2) : '';
+                    return `${timestamp} [${level}]: ${message} ${extraData}`;
+                })
+            )
+        })
     ]
 });
 
@@ -69,16 +97,70 @@ const usersDb    = new Datastore({ filename: './db/users.db'   , autoload: true 
 // Inicialização do GoogleGenerativeAI
 const genAI = new GoogleGenerativeAI(API_KEY);
 
-// Inicialização do modelo Gemini
-const model = genAI.getGenerativeModel({ 
-    model: "gemini-2.0-flash",
-    safetySettings: [
-      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-    ]
-  });
+// Cache para armazenar instâncias do modelo
+const modelCache = new Map();
+
+// Função para gerar uma chave única baseada nas configurações do modelo
+function getModelCacheKey(config) {
+    const {
+        model = "gemini-2.0-flash",
+        temperature = 0.9,
+        topK = 1,
+        topP = 0.95,
+        maxOutputTokens = 1024,
+        systemInstruction = "Seu nome é Amélie. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. Seus comandos podem ser encontrados digitando !help. Se alguém perguntar, aqui está sua lista de comandos: !cego - Aplica configurações para usuários com deficiência visual; !audio - Liga/desliga a transcrição de áudio; !video - Liga/desliga a interpretação de vídeo; !imagem - Liga/desliga a audiodescrição de imagem; !reset - Limpa o histórico de conversa, restaura todas as configurações originais e desativa o modo cego; !prompt set <nome> <texto> - Define uma nova personalidade; !prompt get <nome> - Mostra uma personalidade existente; !prompt list - Lista todas as personalidades; !prompt use <nome> - Usa uma personalidade específica; !prompt clear - Remove a personalidade ativa; !config set <param> <valor> - Define um parâmetro de configuração; !config get [param] - Mostra a configuração atual; !users - Lista os usuários do grupo; !help - Mostra a mensagem de ajuda. Você não tem outros comandos e não aceita comandos sem a exclamação, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego. Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima. Sua criadora e idealizadora foi a Belle Utsch. Você é baseada no Google Gemini Flash 2.0. Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo. Você lida com as pessoas com tato e bom humor. Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie. Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch."
+    } = config;
+    
+    // Cria uma chave baseada nos parâmetros de configuração
+    return `${model}_${temperature}_${topK}_${topP}_${maxOutputTokens}_${crypto.createHash('md5').update(systemInstruction || '').digest('hex')}`;
+}
+
+// Função para obter um modelo existente do cache ou criar um novo
+function getOrCreateModel(config) {
+    const cacheKey = getModelCacheKey(config);
+    
+    // Verifica se já existe um modelo com essas configurações
+    if (modelCache.has(cacheKey)) {
+        logger.debug(`Usando modelo em cache com chave: ${cacheKey}`);
+        return modelCache.get(cacheKey);
+    }
+    
+    // Caso contrário, cria um novo modelo
+    logger.debug(`Criando novo modelo com chave: ${cacheKey}`);
+    const newModel = genAI.getGenerativeModel({
+        model: config.model || "gemini-2.0-flash",
+        generationConfig: {
+            temperature: config.temperature || 0.9,
+            topK: config.topK || 1,
+            topP: config.topP || 0.95,
+            maxOutputTokens: config.maxOutputTokens || 1024,
+        },
+        safetySettings: [
+            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+        ],
+        systemInstruction: config.systemInstruction || "Seu nome é Amélie. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. Seus comandos podem ser encontrados digitando !help. Se alguém perguntar, aqui está sua lista de comandos: !cego - Aplica configurações para usuários com deficiência visual; !audio - Liga/desliga a transcrição de áudio; !video - Liga/desliga a interpretação de vídeo; !imagem - Liga/desliga a audiodescrição de imagem; !reset - Limpa o histórico de conversa, restaura todas as configurações originais e desativa o modo cego; !prompt set <nome> <texto> - Define uma nova personalidade; !prompt get <nome> - Mostra uma personalidade existente; !prompt list - Lista todas as personalidades; !prompt use <nome> - Usa uma personalidade específica; !prompt clear - Remove a personalidade ativa; !config set <param> <valor> - Define um parâmetro de configuração; !config get [param] - Mostra a configuração atual; !users - Lista os usuários do grupo; !help - Mostra a mensagem de ajuda. Você não tem outros comandos e não aceita comandos sem a exclamação, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego. Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima.  Sua criadora e idealizadora foi a Belle Utsch. Você é baseada no Google Gemini Flash 2.0. Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo. Você lida com as pessoas com tato e bom humor. Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie. Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch."
+    });
+    
+    // Armazena o modelo no cache
+    modelCache.set(cacheKey, newModel);
+    
+    // Limita o tamanho do cache para evitar uso excessivo de memória
+    if (modelCache.size > 10) {
+        const oldestKey = modelCache.keys().next().value;
+        modelCache.delete(oldestKey);
+        logger.debug(`Cache de modelos atingiu o limite. Removendo modelo mais antigo: ${oldestKey}`);
+    }
+    
+    return newModel;
+}
+
+// Inicialização do modelo Gemini padrão
+const defaultModel = getOrCreateModel({
+    model: "gemini-2.0-flash"
+});
 
 // Inicialização do FileManager
 const fileManager = new GoogleAIFileManager(API_KEY);
@@ -89,17 +171,21 @@ const lastResponses = new Map();
 // Configuração padrão
 const defaultConfig = {
     temperature: 0.9,
-    topK: 40,
+    topK: 1,
     topP: 0.95,
     maxOutputTokens: 1024,
     mediaImage: true,  
-    mediaAudio: true,  
+    mediaAudio: false,  
     mediaVideo: true   
 }
 
 // Configuração do cliente WhatsApp
 const client = new Client({
-    authStrategy: new LocalAuth()
+    authStrategy: new LocalAuth(),
+    puppeteer: {
+	    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    }
+    
 });
 
 client.on('qr', qr => {
@@ -130,23 +216,23 @@ client.on('message_create', async (msg) => {
         if (isGroup) {
             const group = await getOrCreateGroup(chat);
             groupInfo = ` no grupo "${group.title}" (${chat.id._serialized})`;
-            logger.info(`Processando mensagem no grupo: ${group.title}`);
+            logger.debug(`Processando mensagem no grupo: ${group.title}`);
         }
 
         usuario = await getOrCreateUser(msg.author);
-        logger.info(`Mensagem recebida: (${usuario.name}, ${groupInfo}) -> ${msg.body}`);
+        logger.debug(`Mensagem recebida: (${usuario.name}, ${groupInfo}) -> ${msg.body}`);
 
         const chatId = chat.id._serialized;
         const isCommand = msg.body.startsWith('!');
 
         if (isCommand) {
-            logger.info("Processando comando...");
+            logger.debug("Processando comando...");
             await handleCommand(msg, chatId);
             return;
         }
 
         if (msg.hasMedia) {
-            logger.info("Processando mídia...");
+            logger.debug("Processando mídia...");
             const attachmentData = await msg.downloadMedia();
             if (!attachmentData || !attachmentData.data) {
                 logger.error('Não foi possível obter dados de mídia.');
@@ -212,31 +298,35 @@ client.on('message_create', async (msg) => {
         await handleTextMessage(msg);
 
     } catch (error) {
-        logger.error(`Erro ao processar mensagem: ${error.message}`, { error });
+        //logger.error(`Erro ao processar mensagem: ${error.message}`, { error });
         await msg.reply('Desculpe, ocorreu um erro inesperado. Por favor, tente novamente mais tarde.');
     }
 });
 
 const helpText = `Olá! Eu sou a Amélie, sua assistente de AI multimídia acessível integrada ao WhatsApp.
-
 Minha idealizadora é a Belle Utsch. Quer conhecê-la? Clica aqui: https://beacons.ai/belleutsch
-
 Meu repositório fica em https://github.com/manelsen/amelie
+Esses são meus comandos disponíveis para configuração:
 
-Esses são meus comandos disponíveis para configuração:\n 
+!cego - Aplica configurações para usuários com deficiência visual
+
+!audio - Liga/desliga a transcrição de áudio
+!video - Liga/desliga a interpretação de vídeo
+!imagem - Liga/desliga a audiodescrição de imagem
+
+
 !reset - Limpa o histórico de conversa, restaura todas as configurações
-         originais e desativa o modo cego\n 
-!prompt set <nome> <texto> - Define uma nova personalidade\n 
-!prompt get <nome> - Mostra uma personalidade existente\n 
-!prompt list - Lista todas as personalidades\n 
-!prompt use <nome> - Usa uma personalidade específica\n 
-!prompt clear - Remove a personalidade ativa\n 
-!config set <param> <valor> - Define um parâmetro de configuração\n 
-!config get [param] - Mostra a configuração atual\n 
-!users - Lista os usuários do grupo\n 
-!cego - Aplica configurações para usuários com deficiência visual\n 
-!help - Mostra esta mensagem de ajuda`;
+         originais e desativa o modo cego
+!prompt set <nome> <texto> - Define uma nova personalidade
+!prompt get <nome> - Mostra uma personalidade existente
+!prompt list - Lista todas as personalidades
+!prompt use <nome> - Usa uma personalidade específica
+!prompt clear - Remove a personalidade ativa
+!config set <param> <valor> - Define um parâmetro de configuração
+!config get [param] - Mostra a configuração atual
+!users - Lista os usuários do grupo
 
+!help - Mostra esta mensagem de ajuda`;
 client.on('group_join', async (notification) => {
     if (notification.recipientIds.includes(client.info.wid._serialized)) {
         const chat = await notification.getChat();
@@ -276,14 +366,14 @@ async function shouldRespondInGroup(msg, chat) {
         mention.id._serialized === client.info.wid._serialized
     );
     if (isBotMentioned) {
-        logger.info("Vou responder porque a bot foi mencionada")
+        logger.debug("Vou responder porque a bot foi mencionada")
         return true;
     }
 
     if (msg.hasQuotedMsg) {
         const quotedMsg = await msg.getQuotedMessage();
         if (quotedMsg.fromMe) {
-            logger.info("Vou responder porque é uma resposta à bot")
+            logger.debug("Vou responder porque é uma resposta à bot")
             return true;
         }
     }
@@ -291,11 +381,11 @@ async function shouldRespondInGroup(msg, chat) {
     const messageLowerCase = msg.body.toLowerCase();
     const botNameLowerCase = bot_name.toLowerCase();
     if (messageLowerCase.includes(botNameLowerCase)) {
-        logger.info("Vou responder porque mencionaram meu nome")
+        logger.debug("Vou responder porque mencionaram meu nome")
         return true;
     }
 
-    logger.info("Não é nenhum caso especial e não vou responder")
+    logger.debug("Não é nenhum caso especial e não vou responder")
     return false;
 }
 
@@ -317,6 +407,9 @@ async function handleCommand(msg, chatId) {
             case 'config': await handleConfigCommand(msg, args, chatId); break;
             case 'users':  await listGroupUsers(msg); break;
             case 'cego':   await handleCegoCommand(msg, chatId); break;
+            case 'audio':  await handleMediaToggleCommand(msg, chatId, 'mediaAudio', 'transcrição de áudio'); break;
+            case 'video':  await handleMediaToggleCommand(msg, chatId, 'mediaVideo', 'interpretação de vídeo'); break;
+            case 'imagem': await handleMediaToggleCommand(msg, chatId, 'mediaImage', 'audiodescrição de imagem'); break;
             default:
                 await msg.reply(
                     'Comando desconhecido. Use !help para ver os comandos disponíveis.'
@@ -327,6 +420,29 @@ async function handleCommand(msg, chatId) {
         await msg.reply('Desculpe, ocorreu um erro ao executar o comando. Por favor, tente novamente.');
     }
 }
+
+async function handleMediaToggleCommand(msg, chatId, configParam, featureName) {
+    try {
+        // Obter configuração atual
+        const config = await getConfig(chatId);
+        const currentValue = config[configParam] === true;
+        
+        // Alternar para o valor oposto
+        const newValue = !currentValue;
+        await setConfig(chatId, configParam, newValue);
+        
+        // Informar o usuário sobre a nova configuração
+        const statusMessage = newValue ? 'ativada' : 'desativada';
+        await msg.reply(`A ${featureName} foi ${statusMessage} para este chat.`);
+        
+        logger.info(`${configParam} foi ${statusMessage} para o chat ${chatId}`);
+    } catch (error) {
+        logger.error(`Erro ao alternar ${configParam}: ${error.message}`, { error });
+        await msg.reply(`Desculpe, ocorreu um erro ao alternar a ${featureName}. Por favor, tente novamente.`);
+    }
+}
+
+
 
 function removeEmojis(text) {
     return text.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1F018}-\u{1F0FF}\u{1F100}-\u{1F2FF}]/gu, '');
@@ -351,7 +467,7 @@ async function handleCegoCommand(msg, chatId) {
         await setConfig(chatId, 'mediaImage', true);
         await setConfig(chatId, 'mediaAudio', false);
 
-        const audiomarPrompt = `Você é um assistente de AI especializado em audiodescrição, projetado para funcionar em um grupo de WhatsApp com mais de 200 pessoas cegas. Sua função principal é descrever imagens e stickers compartilhados no grupo, fornecendo uma audiodescrição profissional, detalhada, didática e polida.
+        const audiomarPrompt = `Seu nome é Amélie. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. Seus comandos podem ser encontrados digitando !help. Se alguém perguntar, aqui está sua lista de comandos: !cego - Aplica configurações para usuários com deficiência visual; !audio - Liga/desliga a transcrição de áudio; !video - Liga/desliga a interpretação de vídeo; !imagem - Liga/desliga a audiodescrição de imagem; !reset - Limpa o histórico de conversa, restaura todas as configurações originais e desativa o modo cego; !prompt set <nome> <texto> - Define uma nova personalidade; !prompt get <nome> - Mostra uma personalidade existente; !prompt list - Lista todas as personalidades; !prompt use <nome> - Usa uma personalidade específica; !prompt clear - Remove a personalidade ativa; !config set <param> <valor> - Define um parâmetro de configuração; !config get [param] - Mostra a configuração atual; !users - Lista os usuários do grupo; !help - Mostra a mensagem de ajuda. Você não tem outros comandos e não aceita comandos sem a exclamação, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego. Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima. Sua criadora e idealizadora foi a Belle Utsch. Você é baseada no Google Gemini Flash 2.0. Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo. Você lida com as pessoas com tato e bom humor. Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie. Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch. Você é uma assistente de AI especializada em audiodescrição, projetada para funcionar em um grupo de WhatsApp com mais de 200 pessoas cegas. Sua função principal é descrever imagens e stickers compartilhados no grupo, fornecendo uma audiodescrição profissional, detalhada, didática e polida.
         
         Diretrizes Gerais:
         
@@ -380,13 +496,13 @@ async function handleCegoCommand(msg, chatId) {
         Descreva a iluminação se for um elemento significativo da imagem.
         Para obras de arte, inclua informações sobre o estilo artístico e técnicas utilizadas.`;
 
-        await setSystemPrompt(chatId, 'Audiomar', audiomarPrompt);
-        await setActiveSystemPrompt(chatId, 'Audiomar');
+        await setSystemPrompt(chatId, 'Amelie', audiomarPrompt);
+        await setActiveSystemPrompt(chatId, 'Amelie');
 
         await msg.reply('Configurações para usuários com deficiência visual aplicadas com sucesso:\n' +
                         '- Descrição de imagens habilitada\n' +
                         '- Transcrição de áudio desabilitada\n' +
-                        '- Prompt de audiodescrição "Audiomar" ativado');
+                        '- Prompt de audiodescrição "Amelie" ativado');
 
         logger.info(`Configurações para usuários com deficiência visual aplicadas no chat ${chatId}`);
     } catch (error) {
@@ -457,20 +573,12 @@ async function generateResponseWithTextAndImage(userPrompt, imageData, chatId) {
             { text: userPrompt }
         ];
 
-        const model = genAI.getGenerativeModel({
+        const model = getOrCreateModel({
             model: "gemini-2.0-flash",
-            generationConfig: {
-                temperature: userConfig.temperature,
-                topK: userConfig.topK,
-                topP: userConfig.topP,
-                maxOutputTokens: userConfig.maxOutputTokens,
-            },
-            safetySettings: [
-                { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-                { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-            ],
+            temperature: userConfig.temperature,
+            topK: userConfig.topK,
+            topP: userConfig.topP,
+            maxOutputTokens: userConfig.maxOutputTokens,
             systemInstruction: userConfig.systemInstructions
         });
 
@@ -577,7 +685,7 @@ async function handleAudioMessage(msg, audioData, chatId) {
     try {
         const config = await getConfig(chatId);
         if (!config.mediaAudio) {
-            logger.info(`Transcrição de áudio desabilitada para o chat ${chatId}. Ignorando mensagem de áudio.`);
+            logger.debug(`Transcrição de áudio desabilitada para o chat ${chatId}. Ignorando mensagem de áudio.`);
             return;
         }
 
@@ -588,7 +696,7 @@ async function handleAudioMessage(msg, audioData, chatId) {
         }
 
         const isPTT = audioData.mimetype === 'audio/ogg; codecs=opus';
-        logger.info(`Processando arquivo de áudio: ${isPTT ? 'PTT' : 'Áudio regular'}`);
+        logger.debug(`Processando arquivo de áudio: ${isPTT ? 'PTT' : 'Áudio regular'}`);
 
         const audioHash = crypto.createHash('md5').update(audioData.data).digest('hex');
         if (lastProcessedAudio === audioHash) {
@@ -600,20 +708,12 @@ async function handleAudioMessage(msg, audioData, chatId) {
         const base64AudioFile = audioData.data.toString('base64');
         const userConfig = await getConfig(chatId);
 
-        const modelWithInstructions = genAI.getGenerativeModel({
+        const modelWithInstructions = getOrCreateModel({
             model: "gemini-2.0-flash",
-            generationConfig: {
-                temperature: 0.3,
-                topK: userConfig.topK,
-                topP: userConfig.topP,
-                maxOutputTokens: userConfig.maxOutputTokens,
-            },
-            safetySettings: [
-                { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-                { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-            ],
+            temperature: 0.3,
+            topK: userConfig.topK,
+            topP: userConfig.topP,
+            maxOutputTokens: userConfig.maxOutputTokens,
             systemInstruction: userConfig.systemInstructions + "\nFoque apenas no áudio mais recente. Transcreva e resuma seu conteúdo em português."
         });
 
@@ -666,20 +766,12 @@ async function handleImageMessage(msg, imageData, chatId) {
         const history = await getMessageHistory(chatId, 5);
         const historyPrompt = history.join('\n');
 
-        const modelWithInstructions = genAI.getGenerativeModel({
+        const modelWithInstructions = getOrCreateModel({
             model: "gemini-2.0-flash",
-            generationConfig: {
-                temperature: 0.5,
-                topK: userConfig.topK,
-                topP: userConfig.topP,
-                maxOutputTokens: userConfig.maxOutputTokens,
-            },
-            safetySettings: [
-                { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-                { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-            ],
+            temperature: 0.5,
+            topK: userConfig.topK,
+            topP: userConfig.topP,
+            maxOutputTokens: userConfig.maxOutputTokens,
             systemInstruction: userConfig.systemInstructions + "\nFoque apenas na imagem mais recente. Descreva apenas o que você vê com certeza. Evite fazer suposições ou inferências além do que é claramente visível na imagem."
         });
 
@@ -739,6 +831,15 @@ async function handleVideoMessage(msg, videoData, chatId) {
 
         const userConfig = await getConfig(chatId);
 
+        const model = getOrCreateModel({
+            model: "gemini-2.0-flash",
+            temperature: userConfig.temperature,
+            topK: userConfig.topK,
+            topP: userConfig.topP,
+            maxOutputTokens: userConfig.maxOutputTokens,
+            systemInstruction: userConfig.systemInstructions
+        });
+
         const contentParts = [
             {
               fileData: {
@@ -773,20 +874,12 @@ async function handleVideoMessage(msg, videoData, chatId) {
 async function generateResponseWithText(userPrompt, chatId) {
     try {
       const userConfig = await getConfig(chatId);
-      const model = genAI.getGenerativeModel({
+      const model = getOrCreateModel({
         model: "gemini-2.0-flash",
-        generationConfig: {
-          temperature: userConfig.temperature,
-          topK: userConfig.topK,
-          topP: userConfig.topP,
-          maxOutputTokens: userConfig.maxOutputTokens,
-        },
-        safetySettings: [
-          { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-        ],
+        temperature: userConfig.temperature,
+        topK: userConfig.topK,
+        topP: userConfig.topP,
+        maxOutputTokens: userConfig.maxOutputTokens,
         systemInstruction: userConfig.systemInstructions
       });
       
@@ -1099,11 +1192,31 @@ async function sendMessage(msg, text) {
         }
 
         let trimmedText = text.trim();
+        trimmedText = trimmedText.replace(/^(?:amelie:[\s]*)+/i, '');
         trimmedText = trimmedText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n{3,}/g, '\n\n');
 
-        logger.debug('Enviando mensagem:', { text: trimmedText });
+        // Obter informações do remetente e do chat
+        const chat = await msg.getChat();
+        const isGroup = chat.id._serialized.endsWith('@g.us');
+        const sender = await getOrCreateUser(msg.author || msg.from);
+        const senderName = sender.name;
+        
+        // Preparar o texto de log
+        let logPrefix = `Mensagem de ${senderName}`;
+        
+        // Adicionar informação do grupo, se aplicável
+        if (isGroup) {
+            const group = await getOrCreateGroup(chat);
+            logPrefix += ` no grupo "${group.title || 'Desconhecido'}"`;
+        }
+        
+        // Obter o corpo da mensagem original
+        const originalMessage = msg.body || "[Mídia sem texto]";
+        
+        // Log no formato solicitado
+        logger.info(`${logPrefix}: ${originalMessage}\nResposta: ${trimmedText}`);
+        
         await msg.reply(trimmedText);
-        logger.info(`Mensagem enviada: ${ trimmedText }`);
     } catch (error) {
         logger.error('Erro ao enviar mensagem:', { 
             error: error.message,
