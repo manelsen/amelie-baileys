@@ -1,3 +1,14 @@
+/**
+ * Amélie - Assistente Virtual de IA para WhatsApp
+ * 
+ * Uma assistente virtual multimídia focada em acessibilidade, desenvolvida por Belle Utsch.
+ * Integra-se ao WhatsApp e processa texto, áudio, imagem e vídeo para fornecer respostas acessíveis.
+ * 
+ * @author Belle Utsch
+ * @version 1.0.0
+ * @license MIT
+ */
+
 const qrcode                  = require('qrcode-terminal');
 const { Client, LocalAuth }   = require('whatsapp-web.js');
 const { GoogleGenerativeAI }  = require("@google/generative-ai");
@@ -18,8 +29,13 @@ const MAX_HISTORY             = parseInt(process.env.MAX_HISTORY || '50');
 
 let bot_name                  = process.env.BOT_NAME || 'Amelie';
 let lastProcessedAudio        = null;
+let reconnectCount            = 0;
+const MAX_RECONNECT_ATTEMPTS  = 5;
 
-// Configuração do logger
+/**
+ * Obtém informações da pilha de chamadas para log
+ * @returns {string} Informação de arquivo e linha para o log
+ */
 function getStackInfo() {
     const originalFunc = Error.prepareStackTrace;
 
@@ -38,6 +54,9 @@ function getStackInfo() {
     }
 }
 
+/**
+ * Configuração de formato personalizado para o logger
+ */
 const myFormat = winston.format.printf(({ timestamp, level, message, ...rest }) => {
     const lineInfo = getStackInfo();
     const extraData = Object.keys(rest).length ? JSON.stringify(rest, null, 2) : '';
@@ -60,6 +79,9 @@ const myFormat = winston.format.printf(({ timestamp, level, message, ...rest }) 
     return `${timestamp} [${colors.yellow(level)}]: ${coloredMessage} ${extraData}`;
 });
 
+/**
+ * Configuração do logger com saída para console e arquivo
+ */
 const logger = winston.createLogger({
     level: 'info',
     format: winston.format.combine(
@@ -87,7 +109,7 @@ const logger = winston.createLogger({
     ]
 });
 
-// Configuração do NeDB - Removido messagesDb
+// Configuração dos bancos de dados NeDB
 const promptsDb  = new Datastore({ filename: './db/prompts.db' , autoload: true });
 const configDb   = new Datastore({ filename: './db/config.db'  , autoload: true });
 const groupsDb   = new Datastore({ filename: './db/groups.db'  , autoload: true });
@@ -99,7 +121,11 @@ const genAI = new GoogleGenerativeAI(API_KEY);
 // Cache para armazenar instâncias do modelo
 const modelCache = new Map();
 
-// Função para gerar uma chave única baseada nas configurações do modelo
+/**
+ * Gera uma chave única baseada nas configurações do modelo
+ * @param {Object} config - Configurações do modelo
+ * @returns {string} Chave única para cache
+ */
 function getModelCacheKey(config) {
     const {
         model = "gemini-2.0-flash",
@@ -114,7 +140,11 @@ function getModelCacheKey(config) {
     return `${model}_${temperature}_${topK}_${topP}_${maxOutputTokens}_${crypto.createHash('md5').update(systemInstruction || '').digest('hex')}`;
 }
 
-// Função para obter um modelo existente do cache ou criar um novo
+/**
+ * Obtém um modelo existente do cache ou cria um novo
+ * @param {Object} config - Configurações do modelo
+ * @returns {Object} Instância do modelo Gemini
+ */
 function getOrCreateModel(config) {
     const cacheKey = getModelCacheKey(config);
     
@@ -167,7 +197,10 @@ const fileManager = new GoogleAIFileManager(API_KEY);
 // Mapa para armazenar as últimas respostas por chat
 const lastResponses = new Map();
 
-// Configuração padrão
+/**
+ * Configuração padrão para a assistente
+ * @type {Object}
+ */
 const defaultConfig = {
     temperature: 0.9,
     topK: 1,
@@ -178,7 +211,9 @@ const defaultConfig = {
     mediaVideo: true   
 }
 
-// Configuração do cliente WhatsApp
+/**
+ * Configuração do cliente WhatsApp
+ */
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
@@ -186,20 +221,61 @@ const client = new Client({
     }
 });
 
+/**
+ * Evento de geração do código QR para login
+ */
 client.on('qr', qr => {
     qrcode.generate(qr, {small: true});
     logger.info('QR code gerado');
 });
 
+/**
+ * Inicializa a assistente virtual, carregando configurações
+ * @async
+ */
 async function initializeBot() {
     try {
         await loadConfigOnStartup();
         logger.info('Todas as configurações foram carregadas com sucesso');
+        
+        // Monitoramento periódico de uso de memória
+        setInterval(() => {
+            const memoryUsage = process.memoryUsage();
+            logger.info(`Uso de memória: ${JSON.stringify({
+                rss: `${Math.round(memoryUsage.rss / 1024 / 1024)}MB`,
+                heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`,
+                heapUsed: `${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB`,
+                external: `${Math.round(memoryUsage.external / 1024 / 1024)}MB`
+            })}`);
+        }, 30 * 60 * 1000); // A cada 30 minutos
+        
     } catch (error) {
         logger.error('Erro ao carregar configurações:', error);
     }
 }
 
+/**
+ * Evento de desconexão do cliente, com tentativas limitadas de reconexão
+ */
+client.on('disconnected', (reason) => {
+    logger.error(`Cliente desconectado: ${reason}`);
+    
+    if (reconnectCount < MAX_RECONNECT_ATTEMPTS) {
+        reconnectCount++;
+        logger.info(`Tentativa de reconexão ${reconnectCount}/${MAX_RECONNECT_ATTEMPTS}...`);
+        
+        setTimeout(() => {
+            client.initialize();
+        }, 5000); // Espera 5 segundos antes de tentar reconectar
+    } else {
+        logger.error(`Número máximo de tentativas de reconexão (${MAX_RECONNECT_ATTEMPTS}) atingido. Encerrando aplicação.`);
+        process.exit(1); // Encerra o processo com código de erro
+    }
+});
+
+/**
+ * Evento de recebimento de mensagem
+ */
 client.on('message_create', async (msg) => {
     try {
         if (msg.fromMe) return;
@@ -301,6 +377,10 @@ client.on('message_create', async (msg) => {
     }
 });
 
+/**
+ * Texto de ajuda com lista de comandos
+ * @type {string}
+ */
 const helpText = `Olá! Eu sou a Amélie, sua assistente de AI multimídia acessível integrada ao WhatsApp.
 Minha idealizadora é a Belle Utsch. Quer conhecê-la? Clica aqui: https://beacons.ai/belleutsch
 Meu repositório fica em https://github.com/manelsen/amelie
@@ -326,6 +406,9 @@ Esses são meus comandos disponíveis para configuração:
 
 !help - Mostra esta mensagem de ajuda`;
 
+/**
+ * Evento de entrada em um grupo
+ */
 client.on('group_join', async (notification) => {
     if (notification.recipientIds.includes(client.info.wid._serialized)) {
         const chat = await notification.getChat();
@@ -337,6 +420,13 @@ client.on('group_join', async (notification) => {
     }
 });
 
+/**
+ * Verifica se a assistente deve responder a uma mensagem em um grupo
+ * @param {Object} msg - Mensagem recebida
+ * @param {Object} chat - Objeto do chat
+ * @returns {boolean} Verdadeiro se deve responder
+ * @async
+ */
 async function shouldRespondInGroup(msg, chat) {
     if (msg.body.startsWith('!')) {
         logger.info("Vou responder porque é um comando")
@@ -372,6 +462,12 @@ async function shouldRespondInGroup(msg, chat) {
     return false;
 }
 
+/**
+ * Processa comandos recebidos pela assistente
+ * @param {Object} msg - Mensagem recebida
+ * @param {string} chatId - ID do chat
+ * @async
+ */
 async function handleCommand(msg, chatId) {
     const [command, ...args] = msg.body.slice(1).split(' ');
     logger.info(`Comando: ${command}, Argumentos: ${args}`);
@@ -403,6 +499,14 @@ async function handleCommand(msg, chatId) {
     }
 }
 
+/**
+ * Ativa ou desativa um recurso de mídia
+ * @param {Object} msg - Mensagem recebida
+ * @param {string} chatId - ID do chat
+ * @param {string} configParam - Parâmetro de configuração
+ * @param {string} featureName - Nome amigável do recurso
+ * @async
+ */
 async function handleMediaToggleCommand(msg, chatId, configParam, featureName) {
     try {
         // Obter configuração atual
@@ -424,10 +528,20 @@ async function handleMediaToggleCommand(msg, chatId, configParam, featureName) {
     }
 }
 
+/**
+ * Remove emojis de um texto
+ * @param {string} text - Texto com emojis
+ * @returns {string} Texto sem emojis
+ */
 function removeEmojis(text) {
     return text.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1F018}-\u{1F0FF}\u{1F100}-\u{1F2FF}]/gu, '');
 }
 
+/**
+ * Reseta as configurações para valores padrão
+ * @param {string} chatId - ID do chat
+ * @returns {Promise} Promise resolvida quando concluída
+ */
 function resetConfig(chatId) {
     return new Promise((resolve, reject) => {
         configDb.update(
@@ -442,6 +556,12 @@ function resetConfig(chatId) {
     });
 }
 
+/**
+ * Configura o modo para usuários com deficiência visual
+ * @param {Object} msg - Mensagem recebida
+ * @param {string} chatId - ID do chat
+ * @async
+ */
 async function handleCegoCommand(msg, chatId) {
     try {
         await setConfig(chatId, 'mediaImage', true);
@@ -491,7 +611,13 @@ async function handleCegoCommand(msg, chatId) {
     }
 }
 
-// Nova função para obter histórico de mensagens diretamente do WhatsApp
+/**
+ * Obtém histórico de mensagens diretamente do WhatsApp
+ * @param {string} chatId - ID do chat
+ * @param {number} limit - Limite de mensagens
+ * @returns {Array} Lista de mensagens formatada
+ * @async
+ */
 async function getMessageHistory(chatId, limit = MAX_HISTORY) {
     try {
         // Obter o objeto de chat pelo ID
@@ -534,13 +660,26 @@ async function getMessageHistory(chatId, limit = MAX_HISTORY) {
     }
 }
 
-// Função vazia para compatibilidade - não armazena mais mensagens
+/**
+ * Função vazia para compatibilidade - não armazena mais mensagens
+ * @param {string} chatId - ID do chat
+ * @param {string} senderName - Nome do remetente
+ * @param {string} message - Conteúdo da mensagem
+ * @param {boolean} isBot - Se a mensagem é da assistente
+ * @returns {Promise} Promise resolvida quando concluída
+ * @async
+ */
 async function updateMessageHistory(chatId, senderName, message, isBot = false) {
     // Não faz nada, pois não estamos mais armazenando mensagens
     logger.debug(`Mensagem processada sem armazenamento: ${senderName}: ${message}`);
     return Promise.resolve();
 }
 
+/**
+ * Processa mensagens de texto
+ * @param {Object} msg - Mensagem recebida
+ * @async
+ */
 async function handleTextMessage(msg) {
     try {
         const chat = await msg.getChat();
@@ -571,9 +710,14 @@ async function handleTextMessage(msg) {
             // Obter histórico diretamente do WhatsApp
             const history = await getMessageHistory(chatId);
             
-            // Adicionar a mensagem atual ao contexto
+            // Verificar se a última mensagem já é a atual antes de adicionar
+            const lastMessage = history.length > 0 ? history[history.length - 1] : '';
             const currentUserMessage = `${user.name}: ${msg.body}`;
-            const historyText = `Histórico de chat: (formato: nome do usuário e em seguida mensagem; responda à última mensagem)\n\n${history.join('\n')}\n${currentUserMessage}`;
+            
+            // Só adiciona a mensagem atual se ela não for a última do histórico
+            const historyText = lastMessage.includes(msg.body)
+                ? `Histórico de chat: (formato: nome do usuário e em seguida mensagem; responda à última mensagem)\n\n${history.join('\n')}`
+                : `Histórico de chat: (formato: nome do usuário e em seguida mensagem; responda à última mensagem)\n\n${history.join('\n')}\n${currentUserMessage}`;
 
             const response = await generateResponseWithText(historyText, chatId);
             await sendMessage(msg, response);
@@ -584,6 +728,14 @@ async function handleTextMessage(msg) {
     }
 }
 
+/**
+ * Gera resposta combinando texto e imagem
+ * @param {string} userPrompt - Prompt do usuário
+ * @param {Object} imageData - Dados da imagem
+ * @param {string} chatId - ID do chat
+ * @returns {string} Resposta gerada
+ * @async
+ */
 async function generateResponseWithTextAndImage(userPrompt, imageData, chatId) {
     try {
         const userConfig = await getConfig(chatId);
@@ -625,6 +777,12 @@ async function generateResponseWithTextAndImage(userPrompt, imageData, chatId) {
     }
 }
 
+/**
+ * Obtém ou cria um grupo no banco de dados
+ * @param {Object} chat - Objeto do chat
+ * @returns {Object} Informações do grupo
+ * @async
+ */
 async function getOrCreateGroup(chat) {
     return new Promise((resolve, reject) => {
         const groupId = chat.id._serialized;
@@ -663,6 +821,13 @@ async function getOrCreateGroup(chat) {
     });
 }
 
+/**
+ * Obtém ou cria um usuário no banco de dados
+ * @param {string} sender - ID do remetente
+ * @param {Object} chat - Objeto do chat
+ * @returns {Object} Informações do usuário
+ * @async
+ */
 async function getOrCreateUser(sender, chat) {
     return new Promise((resolve, reject) => {
         usersDb.findOne({ id: sender }, async (err, user) => {
@@ -708,6 +873,13 @@ async function getOrCreateUser(sender, chat) {
     });
 }
 
+/**
+ * Processa mensagens de áudio
+ * @param {Object} msg - Mensagem recebida
+ * @param {Object} audioData - Dados do áudio
+ * @param {string} chatId - ID do chat
+ * @async
+ */
 async function handleAudioMessage(msg, audioData, chatId) {
     try {
         const config = await getConfig(chatId);
@@ -767,6 +939,13 @@ async function handleAudioMessage(msg, audioData, chatId) {
     }
 }
 
+/**
+ * Processa mensagens de imagem
+ * @param {Object} msg - Mensagem recebida
+ * @param {Object} imageData - Dados da imagem
+ * @param {string} chatId - ID do chat
+ * @async
+ */
 async function handleImageMessage(msg, imageData, chatId) {
     try {
         const config = await getConfig(chatId);
@@ -816,6 +995,13 @@ async function handleImageMessage(msg, imageData, chatId) {
     }
 }
 
+/**
+ * Processa mensagens de vídeo
+ * @param {Object} msg - Mensagem recebida
+ * @param {Object} videoData - Dados do vídeo
+ * @param {string} chatId - ID do chat
+ * @async
+ */
 async function handleVideoMessage(msg, videoData, chatId) {
     try {
         const config = await getConfig(chatId);
@@ -893,6 +1079,13 @@ async function handleVideoMessage(msg, videoData, chatId) {
     }
 }
 
+/**
+ * Gera resposta baseada apenas em texto
+ * @param {string} userPrompt - Prompt do usuário
+ * @param {string} chatId - ID do chat
+ * @returns {string} Resposta gerada
+ * @async
+ */
 async function generateResponseWithText(userPrompt, chatId) {
     try {
       const userConfig = await getConfig(chatId);
@@ -921,6 +1114,11 @@ async function generateResponseWithText(userPrompt, chatId) {
     }
 }
 
+/**
+ * Carrega todas as configurações na inicialização
+ * @returns {Promise} Promise resolvida quando concluída
+ * @async
+ */
 async function loadConfigOnStartup() {
     return new Promise((resolve, reject) => {
         configDb.find({}, async (err, docs) => {
@@ -938,6 +1136,11 @@ async function loadConfigOnStartup() {
     });
 }
 
+/**
+ * Lista os usuários de um grupo
+ * @param {Object} msg - Mensagem recebida
+ * @async
+ */
 async function listGroupUsers(msg) {
     const chat = await msg.getChat();
     if (chat.isGroup) {
@@ -954,6 +1157,10 @@ async function listGroupUsers(msg) {
     }
 }
 
+/**
+ * Inicializa a assistente virtual carregando configurações
+ * @async
+ */
 async function initializeBot() {
     try {
         await loadConfigOnStartup();
@@ -963,12 +1170,23 @@ async function initializeBot() {
     }
 }
 
-// Função simplificada para resetHistory - não faz nada pois não temos mais armazenamento
+/**
+ * Resetar histórico (função simplificada para compatibilidade)
+ * @param {string} chatId - ID do chat
+ * @returns {Promise} Promise resolvida quando concluída
+ */
 function resetHistory(chatId) {
     logger.info(`Solicitação para resetar histórico do chat ${chatId} - Sem ação necessária devido à nova abordagem LGPD`);
     return Promise.resolve();
 }
 
+/**
+ * Processa comandos relacionados a prompts
+ * @param {Object} msg - Mensagem recebida
+ * @param {Array} args - Argumentos do comando
+ * @param {string} chatId - ID do chat
+ * @async
+ */
 async function handlePromptCommand(msg, args, chatId) {
     const [subcommand, name, ...rest] = args;
 
@@ -1025,6 +1243,13 @@ async function handlePromptCommand(msg, args, chatId) {
     }
 }
 
+/**
+ * Processa comandos relacionados a configurações
+ * @param {Object} msg - Mensagem recebida
+ * @param {Array} args - Argumentos do comando
+ * @param {string} chatId - ID do chat
+ * @async
+ */
 async function handleConfigCommand(msg, args, chatId) {
     const [subcommand, param, value] = args;
 
@@ -1066,6 +1291,13 @@ async function handleConfigCommand(msg, args, chatId) {
     }
 }
 
+/**
+ * Define um prompt de sistema
+ * @param {string} chatId - ID do chat
+ * @param {string} name - Nome do prompt
+ * @param {string} text - Texto do prompt
+ * @returns {Promise} Promise resolvida quando concluída
+ */
 function setSystemPrompt(chatId, name, text) {
     return new Promise((resolve, reject) => {
         const formattedText = `Seu nome é ${name}. ${text}`;
@@ -1076,6 +1308,12 @@ function setSystemPrompt(chatId, name, text) {
     });
 }
 
+/**
+ * Obtém um prompt de sistema pelo nome
+ * @param {string} chatId - ID do chat
+ * @param {string} name - Nome do prompt
+ * @returns {Promise<Object>} Prompt encontrado ou null
+ */
 function getSystemPrompt(chatId, name) {
     return new Promise((resolve, reject) => {
         promptsDb.findOne({ chatId, name }, (err, doc) => {
@@ -1085,6 +1323,11 @@ function getSystemPrompt(chatId, name) {
     });
 }
 
+/**
+ * Lista todos os prompts de sistema para um chat
+ * @param {string} chatId - ID do chat
+ * @returns {Promise<Array>} Lista de prompts
+ */
 function listSystemPrompts(chatId) {
     return new Promise((resolve, reject) => {
         promptsDb.find({ chatId }, (err, docs) => {
@@ -1094,6 +1337,13 @@ function listSystemPrompts(chatId) {
     });
 }
 
+/**
+ * Define um prompt de sistema como ativo
+ * @param {string} chatId - ID do chat
+ * @param {string} promptName - Nome do prompt
+ * @returns {Promise<boolean>} Verdadeiro se sucesso
+ * @async
+ */
 async function setActiveSystemPrompt(chatId, promptName) {
     try {
         const prompt = await getSystemPrompt(chatId, promptName);
@@ -1109,6 +1359,12 @@ async function setActiveSystemPrompt(chatId, promptName) {
     }
 }
 
+/**
+ * Remove o prompt de sistema ativo
+ * @param {string} chatId - ID do chat
+ * @returns {Promise<boolean>} Verdadeiro se sucesso
+ * @async
+ */
 async function clearActiveSystemPrompt(chatId) {
     try {
         await setConfig(chatId, 'activePrompt', null);
@@ -1119,6 +1375,13 @@ async function clearActiveSystemPrompt(chatId) {
     }
 }
 
+/**
+ * Define um parâmetro de configuração
+ * @param {string} chatId - ID do chat
+ * @param {string} param - Nome do parâmetro
+ * @param {any} value - Valor do parâmetro
+ * @returns {Promise} Promise resolvida quando concluída
+ */
 function setConfig(chatId, param, value) {
     return new Promise((resolve, reject) => {
         configDb.update(
@@ -1133,6 +1396,12 @@ function setConfig(chatId, param, value) {
     });
 }
 
+/**
+ * Obtém as configurações de um chat
+ * @param {string} chatId - ID do chat
+ * @returns {Promise<Object>} Configurações do chat
+ * @async
+ */
 async function getConfig(chatId) {
     return new Promise((resolve, reject) => {
         configDb.findOne({ chatId }, async (err, doc) => {
@@ -1163,6 +1432,12 @@ async function getConfig(chatId) {
     });
 }
 
+/**
+ * Envia uma mensagem de resposta
+ * @param {Object} msg - Mensagem original
+ * @param {string} text - Texto da resposta
+ * @async
+ */
 async function sendMessage(msg, text) {
     try {
         if (!text || typeof text !== 'string' || text.trim() === '') {
@@ -1207,8 +1482,10 @@ async function sendMessage(msg, text) {
     }
 }
 
+// Inicializa o cliente e configura tratamento de erros
 client.initialize();
 
+// Tratamento de erros não capturados
 process.on('unhandledRejection', (reason, promise) => {
     logger.error('Unhandled Rejection at:', { promise, reason });
 });
@@ -1218,6 +1495,7 @@ process.on('uncaughtException', (error) => {
     process.exit(1);
 });
 
+// Exporta funções para uso em outros módulos
 module.exports = {
     getOrCreateUser,
     updateMessageHistory,
