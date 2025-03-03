@@ -35,6 +35,8 @@ Clique [aqui](http://wa.me/5531993340000) para falar com ela no WhatsApp.
 
 Se quiser adicioná-la a um grupo, basta salvá-la como contato e colocar o contato no grupo.
 
+Se quiser entrar no grupo oficial, fale com a [Belle](https://wa.me/5531983863448).
+
 ## Quer contribuir com o Projeto?
 
 Faça assim:
