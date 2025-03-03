@@ -27,10 +27,386 @@ dotenv.config();
 const API_KEY                 = process.env.API_KEY;
 const MAX_HISTORY             = parseInt(process.env.MAX_HISTORY || '50');
 
-let bot_name                  = process.env.BOT_NAME || 'Amelie';
+let BOT_NAME                  = process.env.BOT_NAME || 'Amélie';
 let lastProcessedAudio        = null;
 let reconnectCount            = 0;
 const MAX_RECONNECT_ATTEMPTS  = 5;
+
+/**
+ * Sistema de monitoramento de saúde para Amélie
+ * Rastreia estatísticas de uso, desempenho e erros
+ */
+const botStats = {
+  startTime: Date.now(),
+  messagesProcessed: {
+    total: 0,
+    text: 0,
+    image: 0,
+    video: 0,
+    audio: 0,
+    commands: 0
+  },
+  uniqueUsers: new Set(), // IDs de usuários únicos
+  groups: new Set(),      // IDs de grupos únicos
+  privatechats: new Set(), // IDs de chats privados
+  errors: {
+    total: 0,
+    text: 0,
+    image: 0,
+    video: 0, 
+    audio: 0,
+    other: 0
+  },
+  lastResetTime: Date.now()
+};
+
+/**
+ * Atualiza estatísticas quando uma mensagem é processada
+ * @param {string} messageType - Tipo de mensagem (text, image, video, audio, command)
+ * @param {string} userId - ID do usuário
+ * @param {string} chatId - ID do chat
+ * @param {boolean} isGroup - Se é um grupo ou chat privado
+ * @param {boolean} isError - Se ocorreu um erro no processamento
+ */
+function updateMessageStats(messageType, userId, chatId, isGroup, isError = false) {
+  // Incrementa contagem total de mensagens
+  botStats.messagesProcessed.total++;
+  
+  // Incrementa contador específico do tipo de mensagem
+  if (messageType in botStats.messagesProcessed) {
+    botStats.messagesProcessed[messageType]++;
+  }
+  
+  // Adiciona usuário ao conjunto de usuários únicos
+  if (userId) {
+    botStats.uniqueUsers.add(userId);
+  }
+  
+  // Adiciona chat ao conjunto apropriado (grupo ou privado)
+  if (chatId) {
+    if (isGroup) {
+      botStats.groups.add(chatId);
+    } else {
+      botStats.privatechats.add(chatId);
+    }
+  }
+  
+  // Registra erros, se houver
+  if (isError) {
+    botStats.errors.total++;
+    if (messageType in botStats.errors) {
+      botStats.errors[messageType]++;
+    } else {
+      botStats.errors.other++;
+    }
+  }
+}
+
+/**
+ * Gera relatório completo de estatísticas
+ * @returns {string} Relatório formatado
+ */
+function generateStatsReport() {
+  const uptime = (Date.now() - botStats.startTime) / (1000 * 60 * 60); // horas
+  const uptimeDays = uptime / 24;
+  
+  return `📊 STATUS DA ASSISTENTE APÓS ${uptime.toFixed(2)}h ONLINE (${uptimeDays.toFixed(2)} dias):
+  
+🌍 ALCANCE:
+- Grupos ativos: ${botStats.groups.size}
+- Chats privados: ${botStats.privatechats.size}
+- Usuários únicos atendidos: ${botStats.uniqueUsers.size}
+
+📝 MENSAGENS PROCESSADAS:
+- Total: ${botStats.messagesProcessed.total}
+- Texto: ${botStats.messagesProcessed.text}
+- Imagens: ${botStats.messagesProcessed.image}
+- Vídeos: ${botStats.messagesProcessed.video}
+- Áudios: ${botStats.messagesProcessed.audio}
+- Comandos: ${botStats.messagesProcessed.commands}
+
+⚙️ DESEMPENHO:
+- Taxa de erro: ${(botStats.errors.total/Math.max(botStats.messagesProcessed.total,1)*100).toFixed(2)}%
+- Memória em uso: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(process.memoryUsage().heapTotal / 1024 / 1024)}MB
+- Conexão: ${client?.info?.connected ? 'Estável' : 'Instável'}
+
+❌ ERROS:
+- Total: ${botStats.errors.total}
+- Texto: ${botStats.errors.text}
+- Imagens: ${botStats.errors.image}
+- Vídeos: ${botStats.errors.video}
+- Áudios: ${botStats.errors.audio}
+- Outros: ${botStats.errors.other}`;
+}
+
+/**
+ * Obtém estatísticas detalhadas do banco de dados
+ * @returns {Promise<string>} Estatísticas do banco de dados formatadas
+ * @async
+ */
+async function getDetailedDatabaseStats() {
+  try {
+    // Estatísticas de grupos
+    const groupCount = await new Promise((resolve, reject) => {
+      groupsDb.count({}, (err, count) => {
+        if (err) reject(err);
+        else resolve(count);
+      });
+    });
+    
+    // Estatísticas de usuários
+    const userCount = await new Promise((resolve, reject) => {
+      usersDb.count({}, (err, count) => {
+        if (err) reject(err);
+        else resolve(count);
+      });
+    });
+    
+    // Estatísticas de prompts
+    const promptCount = await new Promise((resolve, reject) => {
+      promptsDb.count({}, (err, count) => {
+        if (err) reject(err);
+        else resolve(count);
+      });
+    });
+    
+    return `📁 ESTATÍSTICAS DE BANCO DE DADOS:
+- Grupos registrados: ${groupCount}
+- Usuários registrados: ${userCount}
+- Prompts personalizados: ${promptCount}`;
+  } catch (error) {
+    logger.error('Erro ao obter estatísticas detalhadas:', error);
+    return "Erro ao obter estatísticas detalhadas do banco de dados";
+  }
+}
+
+/**
+ * Obtém estatísticas detalhadas dos grupos ativos
+ * @returns {Promise<string>} Estatísticas de grupos formatadas
+ * @async
+ */
+async function getActiveGroupStats() {
+  try {
+    const chats = await client.getChats();
+    const groups = chats.filter(chat => chat.isGroup);
+    
+    let groupStats = `👥 DETALHES DOS GRUPOS ATIVOS (${groups.length}):`;
+    let count = 0;
+    
+    for (const group of groups) {
+      if (count++ < 10) { // Limita a 10 grupos para não sobrecarregar a mensagem
+        const participantCount = group.participants ? group.participants.length : "N/A";
+        groupStats += `\n- ${group.name} (${participantCount} participantes)`;
+      }
+    }
+    
+    if (groups.length > 10) {
+      groupStats += `\n- ... e ${groups.length - 10} outros grupos`;
+    }
+    
+    return groupStats;
+  } catch (error) {
+    logger.error('Erro ao obter estatísticas de grupos:', error);
+    return "Erro ao obter estatísticas de grupos ativos";
+  }
+}
+
+/**
+ * Salva estatísticas em arquivo para persistência
+ * @async
+ */
+async function saveStats() {
+    try {
+      // Convert Sets to arrays for serialization
+      const statsToSave = {
+        startTime: botStats.startTime,
+        messagesProcessed: botStats.messagesProcessed,
+        uniqueUsers: Array.from(botStats.uniqueUsers),  // Save actual IDs
+        groups: Array.from(botStats.groups),           // Save actual IDs
+        privatechats: Array.from(botStats.privatechats), // Save actual IDs
+        errors: botStats.errors,
+        lastResetTime: botStats.lastResetTime,
+        lastSaveTime: Date.now()
+      };
+    
+    if (!fs.existsSync('./db')) {
+      fs.mkdirSync('./db', { recursive: true });
+    }
+    
+    fs.writeFileSync(
+      './db/stats.json', 
+      JSON.stringify(statsToSave, null, 2)
+    );
+    
+    logger.info('Estatísticas salvas com sucesso');
+  } catch (error) {
+    logger.error('Erro ao salvar estatísticas:', error);
+  }
+}
+
+/**
+ * Carrega estatísticas de arquivo persistente
+ * @async
+ */
+async function loadStats() {
+    try {
+      if (fs.existsSync('./db/stats.json')) {
+        const savedStats = JSON.parse(fs.readFileSync('./db/stats.json', 'utf8'));
+        
+        // Restore counters
+        botStats.startTime = savedStats.startTime || Date.now();
+        botStats.messagesProcessed = savedStats.messagesProcessed || botStats.messagesProcessed;
+        botStats.errors = savedStats.errors || botStats.errors;
+        botStats.lastResetTime = savedStats.lastResetTime || Date.now();
+        
+        // Restore Sets from arrays if available
+        if (savedStats.uniqueUsers && Array.isArray(savedStats.uniqueUsers)) {
+          savedStats.uniqueUsers.forEach(id => botStats.uniqueUsers.add(id));
+          logger.info(`Carregados ${savedStats.uniqueUsers.length} usuários de estatísticas anteriores`);
+        }
+        
+        if (savedStats.groups && Array.isArray(savedStats.groups)) {
+          savedStats.groups.forEach(id => botStats.groups.add(id));
+          logger.info(`Carregados ${savedStats.groups.length} grupos de estatísticas anteriores`);
+        }
+        
+        if (savedStats.privatechats && Array.isArray(savedStats.privatechats)) {
+          savedStats.privatechats.forEach(id => botStats.privatechats.add(id));
+          logger.info(`Carregados ${savedStats.privatechats.length} chats privados de estatísticas anteriores`);
+        }
+        
+        logger.info('Estatísticas anteriores carregadas com sucesso');
+        logger.info(`Mensagens processadas anteriormente: ${botStats.messagesProcessed.total}`);
+      } else {
+        logger.info('Nenhuma estatística anterior encontrada. Iniciando novos contadores.');
+      }
+    } catch (error) {
+      logger.error('Erro ao carregar estatísticas:', error);
+    }
+  }
+
+/**
+ * Inicializa o sistema de monitoramento de estatísticas
+ * @async
+ */
+async function initializeStatsMonitoring() {
+  // Carrega estatísticas anteriores
+  await loadStats();
+  
+  // Preenche conjuntos de grupos e usuários a partir do banco de dados
+  await populateExistingEntities();
+  
+  // Programa relatórios periódicos
+  setInterval(async () => {
+    const statsReport = generateStatsReport();
+    const dbStats = await getDetailedDatabaseStats();
+    
+    const fullReport = `${statsReport}\n\n${dbStats}`;
+    
+    logger.info(fullReport);
+    
+    // Envia para administrador, se configurado
+    const adminNumber = process.env.ADMIN_NUMBER;
+    if (adminNumber) {
+      try {
+        await client.sendMessage(adminNumber, fullReport);
+      } catch (error) {
+        logger.error('Erro ao enviar relatório para admin:', error);
+      }
+    }
+    
+    // Salva estatísticas periodicamente
+    await saveStats();
+  }, 60 * 60 * 1000); // A cada hora
+    
+  // Salva estatísticas antes de desligar
+  process.on('SIGINT', async () => {
+    logger.info('Salvando estatísticas antes de encerrar...');
+    await saveStats();
+    process.exit(0);
+  });
+  
+  // Salva estatísticas de backup a cada hora
+  setInterval(async () => {
+    await saveStats();
+  //}, 60 * 60 * 1000); uma hora
+  }, 60 * 60 * 1000); // um minuto
+  
+  logger.info('Sistema de monitoramento de estatísticas inicializado');
+}
+
+/**
+ * Preenche conjuntos de entidades existentes a partir do banco de dados e WhatsApp
+ * @async
+ */
+async function populateExistingEntities() {
+    try {
+      // Load existing users from database - your existing code
+      
+      // Improved group loading
+      logger.info("Tentando carregar grupos ativos do WhatsApp...");
+      try {
+        const chats = await client.getChats();
+        let groupCount = 0;
+        let privateCount = 0;
+        
+        for (const chat of chats) {
+          const chatId = chat.id._serialized;
+          if (chat.isGroup) {
+            botStats.groups.add(chatId);
+            groupCount++;
+          } else {
+            botStats.privatechats.add(chatId);
+            privateCount++;
+          }
+        }
+        
+        logger.info(`Carregados ${groupCount} grupos e ${privateCount} chats privados ativos do WhatsApp`);
+        
+        // If no groups were found via WhatsApp API, try the database as backup
+        if (groupCount === 0) {
+          logger.info("Nenhum grupo encontrado via API do WhatsApp, tentando banco de dados...");
+          groupsDb.find({}, (err, groups) => {
+            if (!err && groups && groups.length > 0) {
+              groups.forEach(group => botStats.groups.add(group.id));
+              logger.info(`Fallback: Carregados ${groups.length} grupos do banco de dados`);
+            } else {
+              logger.warn("Nenhum grupo encontrado no banco de dados também.");
+            }
+          });
+        }
+      } catch (error) {
+        logger.error('Erro ao carregar chats do WhatsApp:', error);
+        
+        // Fallback to database
+        groupsDb.find({}, (err, groups) => {
+          if (!err && groups) {
+            groups.forEach(group => botStats.groups.add(group.id));
+            logger.info(`Fallback: Carregados ${groups.length} grupos do banco de dados`);
+          }
+        });
+      }
+    } catch (error) {
+      logger.error('Erro ao popular entidades existentes:', error);
+    }
+  }
+
+/**
+ * Obtém estatísticas específicas para exibição ao usuário
+ * @returns {string} Estatísticas formatadas para exibição
+ */
+function getUserFacingStats() {
+  const uptime = (Date.now() - botStats.startTime) / (1000 * 60 * 60 * 24); // dias
+  
+  return `📊 Estatísticas da Assistente:
+
+🤖 Em operação há ${uptime.toFixed(1)} dias (desde o último reboot!)
+👥 Ajudando ${botStats.uniqueUsers.size} usuários diferentes
+📝 Processou ${botStats.messagesProcessed.total} mensagens
+🖼️ Descreveu ${botStats.messagesProcessed.image} imagens
+🎬 Interpretou ${botStats.messagesProcessed.video} vídeos
+🔊 Transcreveu ${botStats.messagesProcessed.audio} áudios`;
+}
 
 /**
  * Obtém informações da pilha de chamadas para log
@@ -133,7 +509,41 @@ function getModelCacheKey(config) {
         topK = 1,
         topP = 0.95,
         maxOutputTokens = 1024,
-        systemInstruction = "Seu nome é Amélie. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. Seus comandos podem ser encontrados digitando !help. Se alguém perguntar, aqui está sua lista de comandos: !cego - Aplica configurações para usuários com deficiência visual; !audio - Liga/desliga a transcrição de áudio; !video - Liga/desliga a interpretação de vídeo; !imagem - Liga/desliga a audiodescrição de imagem; !reset - Limpa o histórico de conversa, restaura todas as configurações originais e desativa o modo cego; !prompt set <nome> <texto> - Define uma nova personalidade; !prompt get <nome> - Mostra uma personalidade existente; !prompt list - Lista todas as personalidades; !prompt use <nome> - Usa uma personalidade específica; !prompt clear - Remove a personalidade ativa; !config set <param> <valor> - Define um parâmetro de configuração; !config get [param] - Mostra a configuração atual; !users - Lista os usuários do grupo; !help - Mostra a mensagem de ajuda. Você não tem outros comandos e não aceita comandos sem a exclamação, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego. Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima. Sua criadora e idealizadora foi a Belle Utsch. Você é baseada no Google Gemini Flash 2.0. Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo. Você lida com as pessoas com tato e bom humor. Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie. Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch."
+        systemInstruction = `Seu nome é ${BOT_NAME}. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. 
+        
+        Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. 
+
+        Sua transcrição de audios, quando ativada, é verbatim. Transcreva o que foi dito, sem mostrar nenhum tipo de resumo.
+
+        Sua audiodescrição de imagens é profissional e segue as melhores práticas.
+        
+        Seus comandos podem ser encontrados digitando !ajuda. 
+        
+        Se alguém perguntar, aqui está sua lista de comandos: 
+        !cego - Aplica configurações para usuários com deficiência visual; 
+        !audio - Liga/desliga a transcrição de áudio; 
+        !video - Liga/desliga a interpretação de vídeo; 
+        !imagem - Liga/desliga a audiodescrição de imagem; 
+        !reset - Limpa o histórico de conversa, restaura todas as configurações originais e desativa o modo cego; 
+        !prompt set <nome> <texto> - Define uma nova personalidade; 
+        !prompt get <nome> - Mostra uma personalidade existente; 
+        !prompt list - Lista todas as personalidades; 
+        !prompt use <nome> - Usa uma personalidade específica; 
+        !prompt clear - Remove a personalidade ativa; 
+        !config set <param> <valor> - Define um parâmetro de configuração; 
+        !config get [param] - Mostra a configuração atual; 
+        !users - Lista os usuários do grupo; 
+        !ajuda - Mostra a mensagem de ajuda. 
+        
+        Você não tem outros comandos e não aceita comandos sem a exclamação, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego.         
+        Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima.         
+        Sua criadora e idealizadora foi a Belle Utsch.         
+        Você é baseada no Google Gemini Flash 2.0.         
+        Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo.         
+        Você lida com as pessoas com tato e bom humor.         
+        Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie.         
+        Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch. 
+        Se alguém quiser entrar no grupo oficial, direcione para falar com a Belle em https://wa.me/5531983863448.`
     } = config;
     
     // Cria uma chave baseada nos parâmetros de configuração
@@ -170,7 +580,41 @@ function getOrCreateModel(config) {
             { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
             { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
         ],
-        systemInstruction: config.systemInstruction || "Seu nome é Amélie. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. Seus comandos podem ser encontrados digitando !help. Se alguém perguntar, aqui está sua lista de comandos: !cego - Aplica configurações para usuários com deficiência visual; !audio - Liga/desliga a transcrição de áudio; !video - Liga/desliga a interpretação de vídeo; !imagem - Liga/desliga a audiodescrição de imagem; !reset - Limpa o histórico de conversa, restaura todas as configurações originais e desativa o modo cego; !prompt set <nome> <texto> - Define uma nova personalidade; !prompt get <nome> - Mostra uma personalidade existente; !prompt list - Lista todas as personalidades; !prompt use <nome> - Usa uma personalidade específica; !prompt clear - Remove a personalidade ativa; !config set <param> <valor> - Define um parâmetro de configuração; !config get [param] - Mostra a configuração atual; !users - Lista os usuários do grupo; !help - Mostra a mensagem de ajuda. Você não tem outros comandos e não aceita comandos sem a exclamação, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego. Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima.  Sua criadora e idealizadora foi a Belle Utsch. Você é baseada no Google Gemini Flash 2.0. Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo. Você lida com as pessoas com tato e bom humor. Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie. Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch."
+        systemInstruction: config.systemInstruction || `Seu nome é ${BOT_NAME}. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. 
+        
+        Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. 
+
+        Sua transcrição de audios, quando ativada, é verbatim. Transcreva o que foi dito.
+
+        Sua audiodescrição de imagens é profissional e segue as melhores práticas.
+        
+        Seus comandos podem ser encontrados digitando !ajuda. 
+        
+        Se alguém perguntar, aqui está sua lista de comandos: 
+        !cego - Aplica configurações para usuários com deficiência visual; 
+        !audio - Liga/desliga a transcrição de áudio; 
+        !video - Liga/desliga a interpretação de vídeo; 
+        !imagem - Liga/desliga a audiodescrição de imagem; 
+        !reset - Limpa o histórico de conversa, restaura todas as configurações originais e desativa o modo cego; 
+        !prompt set <nome> <texto> - Define uma nova personalidade; 
+        !prompt get <nome> - Mostra uma personalidade existente; 
+        !prompt list - Lista todas as personalidades; 
+        !prompt use <nome> - Usa uma personalidade específica; 
+        !prompt clear - Remove a personalidade ativa; 
+        !config set <param> <valor> - Define um parâmetro de configuração; 
+        !config get [param] - Mostra a configuração atual; 
+        !users - Lista os usuários do grupo; 
+        !ajuda - Mostra a mensagem de ajuda. 
+        
+        Você não tem outros comandos e não aceita comandos sem a exclamação, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego.         
+        Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima.         
+        Sua criadora e idealizadora foi a Belle Utsch.         
+        Você é baseada no Google Gemini Flash 2.0.         
+        Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo.         
+        Você lida com as pessoas com tato e bom humor.         
+        Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie.         
+        Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch. 
+        Se alguém quiser entrar no grupo oficial, direcione para falar com a Belle em https://wa.me/5531983863448`
     });
     
     // Armazena o modelo no cache
@@ -238,6 +682,9 @@ async function initializeBot() {
         await loadConfigOnStartup();
         logger.info('Todas as configurações foram carregadas com sucesso');
         
+        // Inicializa sistema de monitoramento
+        await initializeStatsMonitoring();
+        
         // Monitoramento periódico de uso de memória
         setInterval(() => {
             const memoryUsage = process.memoryUsage();
@@ -301,6 +748,7 @@ client.on('message_create', async (msg) => {
 
         if (isCommand) {
             logger.debug("Processando comando...");
+            updateMessageStats('commands', msg.author, chatId, isGroup);
             await handleCommand(msg, chatId);
             return;
         }
@@ -372,7 +820,7 @@ client.on('message_create', async (msg) => {
         await handleTextMessage(msg);
 
     } catch (error) {
-        //logger.error(`Erro ao processar mensagem: ${error.message}`, { error });
+        logger.error(`Erro ao processar mensagem: ${error.message}`, { error });
         await msg.reply('Desculpe, ocorreu um erro inesperado. Por favor, tente novamente mais tarde.');
     }
 });
@@ -381,9 +829,13 @@ client.on('message_create', async (msg) => {
  * Texto de ajuda com lista de comandos
  * @type {string}
  */
-const helpText = `Olá! Eu sou a Amélie, sua assistente de AI multimídia acessível integrada ao WhatsApp.
-Minha idealizadora é a Belle Utsch. Quer conhecê-la? Clica aqui: https://beacons.ai/belleutsch
+const ajudaText = `Olá! Eu sou a ${BOT_NAME}, sua assistente de AI multimídia acessível integrada ao WhatsApp.
+Minha idealizadora é a Belle Utsch. 
+
+Quer conhecê-la? Clica aqui: https://beacons.ai/belleutsch
 Meu repositório fica em https://github.com/manelsen/amelie
+Se alguém quiser entrar no grupo oficial, fale comigo! https://wa.me/5531983863448
+
 Esses são meus comandos disponíveis para configuração:
 
 !cego - Aplica configurações para usuários com deficiência visual
@@ -392,19 +844,21 @@ Esses são meus comandos disponíveis para configuração:
 !video - Liga/desliga a interpretação de vídeo
 !imagem - Liga/desliga a audiodescrição de imagem
 
+!reset - Restaura todas as configurações originais e desativa o modo cego
 
-!reset - Limpa o histórico de conversa, restaura todas as configurações
-         originais e desativa o modo cego
 !prompt set <nome> <texto> - Define uma nova personalidade
 !prompt get <nome> - Mostra uma personalidade existente
 !prompt list - Lista todas as personalidades
 !prompt use <nome> - Usa uma personalidade específica
 !prompt clear - Remove a personalidade ativa
+
 !config set <param> <valor> - Define um parâmetro de configuração
 !config get [param] - Mostra a configuração atual
-!users - Lista os usuários do grupo
 
-!help - Mostra esta mensagem de ajuda`;
+!users - Lista os usuários do grupo
+!stats - Mostra estatísticas de uso
+
+!ajuda - Mostra esta mensagem de ajuda`;
 
 /**
  * Evento de entrada em um grupo
@@ -415,7 +869,7 @@ client.on('group_join', async (notification) => {
         const group = await getOrCreateGroup(chat);
 
         await chat.sendMessage('Olá a todos! Estou aqui para ajudar. Aqui estão alguns comandos que vocês podem usar:');
-        await chat.sendMessage(helpText);
+        await chat.sendMessage(ajudaText);
         logger.info(`Bot foi adicionado ao grupo "${group.title}" (${chat.id._serialized}) e enviou a saudação.`);
     }
 });
@@ -451,7 +905,7 @@ async function shouldRespondInGroup(msg, chat) {
     }
 
     const messageLowerCase = msg.body.toLowerCase();
-    const botNameLowerCase = bot_name.toLowerCase();
+    const botNameLowerCase = BOT_NAME.toLowerCase();
 
     //if (messageLowerCase.includes(botNameLowerCase)) {
     //    logger.debug("Vou responder porque mencionaram meu nome")
@@ -479,8 +933,8 @@ async function handleCommand(msg, chatId) {
                 await clearActiveSystemPrompt(chatId);
                 await msg.reply('Configurações resetadas para este chat. As transcrições de áudio e imagem foram habilitadas, e os prompts especiais foram desativados.');
                 break;
-            case 'help':
-                await msg.reply(helpText); break;
+            case 'ajuda':
+                await msg.reply(ajudaText); break;
             case 'prompt': await handlePromptCommand(msg, args, chatId); break;
             case 'config': await handleConfigCommand(msg, args, chatId); break;
             case 'users':  await listGroupUsers(msg); break;
@@ -488,15 +942,31 @@ async function handleCommand(msg, chatId) {
             case 'audio':  await handleMediaToggleCommand(msg, chatId, 'mediaAudio', 'transcrição de áudio'); break;
             case 'video':  await handleMediaToggleCommand(msg, chatId, 'mediaVideo', 'interpretação de vídeo'); break;
             case 'imagem': await handleMediaToggleCommand(msg, chatId, 'mediaImage', 'audiodescrição de imagem'); break;
+            case 'stats':
+            case 'estatisticas':
+                await handleStatsCommand(msg);
+                break;
             default:
                 await msg.reply(
-                    'Comando desconhecido. Use !help para ver os comandos disponíveis.'
+                    'Comando desconhecido. Use !ajuda para ver os comandos disponíveis.'
                 );
         }
     } catch (error) {
         logger.error(`Erro ao executar comando: ${error.message}`, { error });
         await msg.reply('Desculpe, ocorreu um erro ao executar o comando. Por favor, tente novamente.');
     }
+}
+
+/**
+ * Processa o comando de estatísticas
+ * @param {Object} msg - Mensagem recebida
+ * @async
+ */
+async function handleStatsCommand(msg) {
+    const stats = getUserFacingStats();
+    await msg.reply(stats);
+    
+    // Atualiza contador de comandos (já foi contabilizado no handler principal)
 }
 
 /**
@@ -567,7 +1037,7 @@ async function handleCegoCommand(msg, chatId) {
         await setConfig(chatId, 'mediaImage', true);
         await setConfig(chatId, 'mediaAudio', false);
 
-        const audiomarPrompt = `Seu nome é Amélie. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. Seus comandos podem ser encontrados digitando !help. Se alguém perguntar, aqui está sua lista de comandos: !cego - Aplica configurações para usuários com deficiência visual; !audio - Liga/desliga a transcrição de áudio; !video - Liga/desliga a interpretação de vídeo; !imagem - Liga/desliga a audiodescrição de imagem; !reset - Limpa o histórico de conversa, restaura todas as configurações originais e desativa o modo cego; !prompt set <nome> <texto> - Define uma nova personalidade; !prompt get <nome> - Mostra uma personalidade existente; !prompt list - Lista todas as personalidades; !prompt use <nome> - Usa uma personalidade específica; !prompt clear - Remove a personalidade ativa; !config set <param> <valor> - Define um parâmetro de configuração; !config get [param] - Mostra a configuração atual; !users - Lista os usuários do grupo; !help - Mostra a mensagem de ajuda. Você não tem outros comandos e não aceita comandos sem a exclamação, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego. Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima. Sua criadora e idealizadora foi a Belle Utsch. Você é baseada no Google Gemini Flash 2.0. Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo. Você lida com as pessoas com tato e bom humor. Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie. Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch. Você é uma assistente de AI especializada em audiodescrição, projetada para funcionar em um grupo de WhatsApp com mais de 200 pessoas cegas. Sua função principal é descrever imagens e stickers compartilhados no grupo, fornecendo uma audiodescrição profissional, detalhada, didática e polida.
+        const audiomarPrompt = `Seu nome é ${BOT_NAME}. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. Seus comandos podem ser encontrados digitando !ajuda. Se alguém perguntar, aqui está sua lista de comandos: !cego - Aplica configurações para usuários com deficiência visual; !audio - Liga/desliga a transcrição de áudio; !video - Liga/desliga a interpretação de vídeo; !imagem - Liga/desliga a audiodescrição de imagem; !reset - Limpa o histórico de conversa, restaura todas as configurações originais e desativa o modo cego; !prompt set <nome> <texto> - Define uma nova personalidade; !prompt get <nome> - Mostra uma personalidade existente; !prompt list - Lista todas as personalidades; !prompt use <nome> - Usa uma personalidade específica; !prompt clear - Remove a personalidade ativa; !config set <param> <valor> - Define um parâmetro de configuração; !config get [param] - Mostra a configuração atual; !users - Lista os usuários do grupo; !ajuda - Mostra a mensagem de ajuda. Você não tem outros comandos e não aceita comandos sem a exclamação, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego. Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima. Sua criadora e idealizadora foi a Belle Utsch. Você é baseada no Google Gemini Flash 2.0. Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo. Você lida com as pessoas com tato e bom humor. Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie. Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch. Você é uma assistente de AI especializada em audiodescrição, projetada para funcionar em um grupo de WhatsApp com mais de 200 pessoas cegas. Sua função principal é descrever imagens e stickers compartilhados no grupo, fornecendo uma audiodescrição profissional, detalhada, didática e polida.
         
         Diretrizes Gerais:
         
@@ -596,13 +1066,13 @@ async function handleCegoCommand(msg, chatId) {
         Descreva a iluminação se for um elemento significativo da imagem.
         Para obras de arte, inclua informações sobre o estilo artístico e técnicas utilizadas.`;
 
-        await setSystemPrompt(chatId, 'Amelie', audiomarPrompt);
-        await setActiveSystemPrompt(chatId, 'Amelie');
+        await setSystemPrompt(chatId, BOT_NAME, audiomarPrompt);
+        await setActiveSystemPrompt(chatId, BOT_NAME);
 
         await msg.reply('Configurações para usuários com deficiência visual aplicadas com sucesso:\n' +
                         '- Descrição de imagens habilitada\n' +
                         '- Transcrição de áudio desabilitada\n' +
-                        '- Prompt de audiodescrição "Amelie" ativado');
+                        '- Prompt de audiodescrição ativado');
 
         logger.info(`Configurações para usuários com deficiência visual aplicadas no chat ${chatId}`);
     } catch (error) {
@@ -637,7 +1107,7 @@ async function getMessageHistory(chatId, limit = MAX_HISTORY) {
             .slice(-limit * 2) // Limita ao número de mensagens
             .map(msg => {
                 const sender = msg.fromMe ? 
-                    (process.env.BOT_NAME || 'Amelie') : 
+                    (process.env.BOT_NAME || 'Amélie') : 
                     (msg._data.notifyName || msg.author || 'Usuário');
                 
                 let content = msg.body || '';
@@ -686,6 +1156,9 @@ async function handleTextMessage(msg) {
         const chatId = chat.id._serialized;
         const sender = msg.author || msg.from;
         const senderName = sender.name;
+        
+        // Atualiza estatísticas
+        updateMessageStats('text', sender, chatId, chat.isGroup);
 
         const user = await getOrCreateUser(sender, chat);
         const chatConfig = await getConfig(chatId);
@@ -723,6 +1196,9 @@ async function handleTextMessage(msg) {
             await sendMessage(msg, response);
         }
     } catch (error) {
+        // Atualiza estatísticas de erro
+        updateMessageStats('text', msg.author || msg.from, msg.chat?.id?._serialized, msg.chat?.isGroup, true);
+        
         logger.error(`Erro ao processar mensagem de texto: ${error.message}`);
         await msg.reply('Desculpe, ocorreu um erro ao processar sua mensagem. Por favor, tente novamente.');
     }
@@ -882,11 +1358,18 @@ async function getOrCreateUser(sender, chat) {
  */
 async function handleAudioMessage(msg, audioData, chatId) {
     try {
+        const chat = await msg.getChat();
         const config = await getConfig(chatId);
+        
+        // Verificação de configuração ANTES da atualização de estatísticas
         if (!config.mediaAudio) {
             logger.debug(`Transcrição de áudio desabilitada para o chat ${chatId}. Ignorando mensagem de áudio.`);
             return;
         }
+        
+        const sender = msg.author || msg.from;
+        // Atualiza estatísticas SOMENTE se for processar o áudio
+        updateMessageStats('audio', sender, chatId, chat.isGroup);
 
         const audioSizeInMB = audioData.data.length / (1024 * 1024);
         if (audioSizeInMB > 20) {
@@ -913,7 +1396,7 @@ async function handleAudioMessage(msg, audioData, chatId) {
             topK: userConfig.topK,
             topP: userConfig.topP,
             maxOutputTokens: userConfig.maxOutputTokens,
-            systemInstruction: userConfig.systemInstructions + "\nFoque apenas no áudio mais recente. Transcreva e resuma seu conteúdo em português."
+            systemInstruction: userConfig.systemInstructions + "\nFoque apenas no áudio mais recente. Transcreva verbatim o que foi dito."
         });
 
         const contentParts = [
@@ -930,10 +1413,12 @@ async function handleAudioMessage(msg, audioData, chatId) {
         const response = result.response.text();
 
         await sendMessage(msg, response);
-        // Não é mais necessário armazenar no messagesDb
 
         logger.info(`Áudio processado com sucesso: ${audioHash}`);
     } catch (error) {
+        // Ainda registramos erros, mas apenas para áudios que tentamos processar
+        updateMessageStats('audio', msg.author || msg.from, msg.chat?.id?._serialized, msg.chat?.isGroup, true);
+        
         logger.error(`Erro ao processar mensagem de áudio: ${error.message}`, { error });
         await msg.reply('Desculpe, ocorreu um erro ao processar o áudio. Por favor, tente novamente.');
     }
@@ -948,11 +1433,18 @@ async function handleAudioMessage(msg, audioData, chatId) {
  */
 async function handleImageMessage(msg, imageData, chatId) {
     try {
+        const chat = await msg.getChat();
         const config = await getConfig(chatId);
+        
+        // Verificação de configuração ANTES da atualização de estatísticas
         if (!config.mediaImage) {
             logger.info(`Descrição de imagem desabilitada para o chat ${chatId}. Ignorando mensagem de imagem.`);
             return;
         }
+        
+        const sender = msg.author || msg.from;
+        // Atualiza estatísticas SOMENTE se for processar a imagem
+        updateMessageStats('image', sender, chatId, chat.isGroup);
 
         let userPrompt = "Descreva esta imagem em detalhes, focando apenas no que você vê com certeza. Se não tiver certeza sobre algo, não mencione.";
         if (msg.body && msg.body.trim() !== '') {
@@ -976,20 +1468,65 @@ async function handleImageMessage(msg, imageData, chatId) {
             topK: userConfig.topK,
             topP: userConfig.topP,
             maxOutputTokens: userConfig.maxOutputTokens,
-            systemInstruction: userConfig.systemInstructions + "\nFoque apenas na imagem mais recente. Descreva apenas o que você vê com certeza. Evite fazer suposições ou inferências além do que é claramente visível na imagem."
+            systemInstruction: userConfig.systemInstructions + `\nFoque apenas na imagem mais recente. Responda imediatamente quando uma imagem ou sticker for compartilhado no grupo. Mantenha suas respostas concisas, mas informativas. Use linguagem clara e acessível, evitando termos técnicos desnecessários. Seja respeitoso e inclusivo em todas as suas interações.
+        
+        Estrutura da Resposta: Para cada imagem ou sticker, sua resposta deve seguir este formato:
+        
+        [Audiodescrição]
+        (Forneça uma descrição objetiva e detalhada da imagem) 
+        
+        Diretrizes para a Descrição Profissional:
+
+        Comece com uma visão geral da imagem antes de entrar em detalhes.
+        Descreva os elementos principais da imagem, do mais importante ao menos relevante.
+        Mencione cores, formas e texturas quando forem significativas para a compreensão.
+        Indique a posição dos elementos na imagem (por exemplo, "no canto superior direito").
+        Descreva expressões faciais e linguagem corporal em fotos com pessoas.
+        Mencione o tipo de imagem (por exemplo, fotografia, ilustração, pintura).
+        Informe sobre o enquadramento (close-up, plano geral, etc.) quando relevante.
+        Inclua detalhes do cenário ou fundo que contribuam para o contexto.
+        Evite usar termos subjetivos como "bonito" ou "feio".
+        Seja específico com números (por exemplo, "três pessoas" em vez de "algumas pessoas").
+        Descreva texto visível na imagem, incluindo legendas ou títulos.
+        Mencione a escala ou tamanho relativo dos objetos quando importante.
+        Indique se a imagem é em preto e branco ou colorida.
+        Descreva a iluminação se for um elemento significativo da imagem.
+        Para obras de arte, inclua informações sobre o estilo artístico e técnicas utilizadas.`
         });
 
         const contentParts = [
             imagePart,
-            { text: `Contexto recente da conversa:\n${historyPrompt}\n\nAgora, considerando apenas a imagem fornecida e ignorando qualquer contexto anterior que não seja diretamente relevante, ${userPrompt}\n\nLembre-se: Descreva apenas o que você vê com certeza na imagem. Se não tiver certeza sobre algo, não mencione.` }
+            { text: `Contexto recente da conversa:\n${historyPrompt}\n\nAgora, considerando apenas a imagem fornecida e ignorando qualquer contexto anterior que não seja diretamente relevante, ${userPrompt}\n\nEstrutura da Resposta: Para cada imagem ou sticker, sua resposta deve seguir este formato:
+        
+        [Audiodescrição]
+        (Forneça uma descrição objetiva e detalhada da imagem) 
+        
+        Diretrizes para a Descrição Profissional:
+
+        Comece com uma visão geral da imagem antes de entrar em detalhes.
+        Descreva os elementos principais da imagem, do mais importante ao menos relevante.
+        Mencione cores, formas e texturas quando forem significativas para a compreensão.
+        Indique a posição dos elementos na imagem (por exemplo, "no canto superior direito").
+        Descreva expressões faciais e linguagem corporal em fotos com pessoas.
+        Mencione o tipo de imagem (por exemplo, fotografia, ilustração, pintura).
+        Informe sobre o enquadramento (close-up, plano geral, etc.) quando relevante.
+        Inclua detalhes do cenário ou fundo que contribuam para o contexto.
+        Evite usar termos subjetivos como "bonito" ou "feio".
+        Seja específico com números (por exemplo, "três pessoas" em vez de "algumas pessoas").
+        Descreva texto visível na imagem, incluindo legendas ou títulos.
+        Mencione a escala ou tamanho relativo dos objetos quando importante.
+        Indique se a imagem é em preto e branco ou colorida.
+        Descreva a iluminação se for um elemento significativo da imagem.
+        Para obras de arte, inclua informações sobre o estilo artístico e técnicas utilizadas.` }
         ];
 
         const result = await modelWithInstructions.generateContent(contentParts);
         const response = await result.response.text();
         await sendMessage(msg, response);
-
-        // Não é mais necessário armazenar no messagesDb
     } catch (error) {
+        // Ainda registramos erros, mas apenas para imagens que tentamos processar
+        updateMessageStats('image', msg.author || msg.from, msg.chat?.id?._serialized, msg.chat?.isGroup, true);
+        
         logger.error(`Erro ao processar mensagem de imagem: ${error.message}`, { error });
         await msg.reply('Desculpe, ocorreu um erro ao processar a imagem. Por favor, tente novamente.');
     }
@@ -1004,11 +1541,21 @@ async function handleImageMessage(msg, imageData, chatId) {
  */
 async function handleVideoMessage(msg, videoData, chatId) {
     try {
+        const chat = await msg.getChat();
         const config = await getConfig(chatId);
+        
+        // Verificação de configuração ANTES da atualização de estatísticas
         if (!config.mediaVideo) {
             logger.info(`Descrição de vídeo desabilitada para o chat ${chatId}. Ignorando mensagem de vídeo.`);
             return;
         }
+        
+        const sender = msg.author || msg.from;
+        // Atualiza estatísticas SOMENTE se for processar o vídeo
+        updateMessageStats('video', sender, chatId, chat.isGroup);
+        
+        // Enviar feedback inicial sobre o processamento
+        await msg.reply("Estou analisando seu vídeo! Isso pode levar alguns momentos, especialmente para vídeos mais longos. Aguarde um pouquinho... ✨");
 
         let userPrompt = "Descreva detalhadamente o conteúdo deste vídeo. Foque em informações visuais, áudio, e contexto geral.";
         if (msg.body && msg.body.trim() !== '') {
@@ -1070,12 +1617,24 @@ async function handleVideoMessage(msg, videoData, chatId) {
         }
 
         await sendMessage(msg, response);
-        // Não é mais necessário armazenar no messagesDb
-
         logger.info("Vídeo processado com sucesso!");
     } catch (error) {
+        // Ainda registramos erros, mas apenas para vídeos que tentamos processar
+        updateMessageStats('video', msg.author || msg.from, msg.chat?.id?._serialized, msg.chat?.isGroup, true);
+        
         logger.error(`Erro ao processar mensagem de vídeo: ${error.message}`, { error });
-        await msg.reply('Desculpe, ocorreu um erro ao processar o vídeo. Por favor, tente novamente.');
+        
+        let mensagemAmigavel = 'Desculpe, ocorreu um erro ao processar o vídeo.';
+        
+        if (error.message.includes('too large')) {
+            mensagemAmigavel = 'Ops! Este vídeo parece ser muito grande para eu processar. Poderia enviar uma versão menor ou comprimida?';
+        } else if (error.message.includes('format')) {
+            mensagemAmigavel = 'Esse formato de vídeo está me dando trabalho! Poderia tentar enviar em outro formato?';
+        } else if (error.message.includes('timeout')) {
+            mensagemAmigavel = 'O processamento demorou mais que o esperado. Talvez o vídeo seja muito complexo?';
+        }
+        
+        await msg.reply(mensagemAmigavel);
     }
 }
 
@@ -1165,6 +1724,46 @@ async function initializeBot() {
     try {
         await loadConfigOnStartup();
         logger.info('Todas as configurações foram carregadas com sucesso');
+        
+        // Inicializa sistema de monitoramento
+        await initializeStatsMonitoring();
+        
+        // Monitoramento periódico de uso de memória
+        setInterval(() => {
+            const memoryUsage = process.memoryUsage();
+            logger.info(`Uso de memória: ${JSON.stringify({
+                rss: `${Math.round(memoryUsage.rss / 1024 / 1024)}MB`,
+                heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`,
+                heapUsed: `${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB`,
+                external: `${Math.round(memoryUsage.external / 1024 / 1024)}MB`
+            })}`);
+        }, 30 * 60 * 1000); // A cada 30 minutos
+        
+        // Limpar arquivos temporários periodicamente
+        setInterval(() => {
+            // Limpar arquivos temporários esquecidos
+            const tempDir = path.join(__dirname, '.'); // ou pasta específica
+            fs.readdir(tempDir, (err, files) => {
+                if (err) return;
+                const videoFiles = files.filter(f => f.startsWith('video_') && f.endsWith('.mp4'));
+                const oldFiles = videoFiles.filter(f => {
+                    try {
+                        const stats = fs.statSync(path.join(tempDir, f));
+                        return Date.now() - stats.mtimeMs > 2 * 60 * 60 * 1000; // Mais de 2 horas
+                    } catch (error) {
+                        return false;
+                    }
+                });
+                oldFiles.forEach(f => {
+                    try {
+                        fs.unlinkSync(path.join(tempDir, f));
+                    } catch (error) {
+                        logger.error(`Erro ao remover arquivo temporário ${f}: ${error.message}`);
+                    }
+                });
+                if (oldFiles.length) logger.info(`Limpou ${oldFiles.length} arquivos temporários antigos`);
+            });
+        }, 60 * 60 * 1000); // A cada hora
     } catch (error) {
         logger.error('Erro ao carregar configurações:', error);
     }
@@ -1239,7 +1838,7 @@ async function handlePromptCommand(msg, args, chatId) {
             await msg.reply('System Instruction removida. Usando o modelo padrão.');
             break;
         default:
-            await msg.reply('Subcomando de prompt desconhecido. Use !help para ver os comandos disponíveis.');
+            await msg.reply('Subcomando de prompt desconhecido. Use !ajuda para ver os comandos disponíveis.');
     }
 }
 
@@ -1287,7 +1886,7 @@ async function handleConfigCommand(msg, args, chatId) {
             }
             break;
         default:
-            await msg.reply('Subcomando de config desconhecido. Use !help para ver os comandos disponíveis.');
+            await msg.reply('Subcomando de config desconhecido. Use !ajuda para ver os comandos disponíveis.');
     }
 }
 
@@ -1416,10 +2015,10 @@ async function getConfig(chatId) {
                     if (activePrompt) {
                         config.systemInstructions = activePrompt.text;
                         const match = config.systemInstructions.match(/^Seu nome é (\w+)\./);
-                        config.botName = match ? match[1] : (process.env.BOT_NAME || 'Amelie');
+                        config.botName = match ? match[1] : (process.env.BOT_NAME || 'Amélie');
                     }
                 } else {
-                    config.botName = process.env.BOT_NAME || 'Amelie';
+                    config.botName = process.env.BOT_NAME || 'Amélie';
                 }
 
                 if (config.systemInstructions && typeof config.systemInstructions !== 'string') {
@@ -1446,7 +2045,7 @@ async function sendMessage(msg, text) {
         }
 
         let trimmedText = text.trim();
-        trimmedText = trimmedText.replace(/^(?:amelie:[\s]*)+/i, '');
+        trimmedText = trimmedText.replace(/^(?:amélie:[\s]*)+/i, '');
         trimmedText = trimmedText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n{3,}/g, '\n\n');
 
         // Obter informações do remetente e do chat
