@@ -20,6 +20,8 @@ const Datastore               = require('nedb');
 const crypto                  = require('crypto');
 const fs                      = require('fs');
 const path                    = require('path');
+const { videoQueue, problemVideosQueue, getErrorMessageForUser } = require('./videoQueue');
+
 
 dotenv.config();
 
@@ -1555,76 +1557,45 @@ async function handleVideoMessage(msg, videoData, chatId) {
         updateMessageStats('video', sender, chatId, chat.isGroup);
         
         // Enviar feedback inicial sobre o processamento
-        await msg.reply("Estou analisando seu vídeo! Isso pode levar alguns momentos, especialmente para vídeos mais longos. Aguarde um pouquinho... ✨");
+        await msg.reply("Estou colocando seu vídeo na fila de processamento! Você receberá o resultado em breve... ✨");
 
         let userPrompt = "Descreva detalhadamente o conteúdo deste vídeo. Foque em informações visuais, áudio, e contexto geral.";
         if (msg.body && msg.body.trim() !== '') {
             userPrompt = msg.body.trim();
         }
 
+        // Garantir que o diretório de arquivos temporários existe
+        if (!fs.existsSync('./temp')) {
+            fs.mkdirSync('./temp', { recursive: true });
+        }
+        
         // Cria um arquivo temporário para o vídeo
-        const tempFilename = `video_${Date.now()}.mp4`;
+        const tempFilename = `./temp/video_${Date.now()}.mp4`;
         fs.writeFileSync(tempFilename, Buffer.from(videoData.data, 'base64'));
-
-        const uploadResponse = await fileManager.uploadFile(tempFilename, {
+        
+        // Adicionar à fila em vez de processar diretamente
+        const jobId = `video_${chatId}_${Date.now()}`;
+        await videoQueue.add('process-video', {
+            tempFilename,
+            chatId,
+            messageId: msg.id._serialized,
             mimeType: videoData.mimetype,
-            displayName: "Vídeo Enviado"
+            userPrompt,
+            senderNumber: msg.from
+        }, { 
+            jobId,
+            removeOnComplete: true,
+            removeOnFail: false
         });
-
-        fs.unlinkSync(tempFilename);
-
-        let file = await fileManager.getFile(uploadResponse.file.name);
-        while (file.state === "PROCESSING") {
-            logger.info("Processando vídeo, aguardando 10s...");
-            await new Promise((resolve) => setTimeout(resolve, 10000));
-            file = await fileManager.getFile(uploadResponse.file.name);
-        }
-
-        if (file.state === "FAILED") {
-            await msg.reply("Desculpe, ocorreu um erro ao processar o vídeo.");
-            return;
-        }
-
-        const userConfig = await getConfig(chatId);
-
-        const model = getOrCreateModel({
-            model: "gemini-2.0-flash",
-            temperature: userConfig.temperature,
-            topK: userConfig.topK,
-            topP: userConfig.topP,
-            maxOutputTokens: userConfig.maxOutputTokens,
-            systemInstruction: userConfig.systemInstructions
-        });
-
-        const contentParts = [
-            {
-              fileData: {
-                mimeType: file.mimeType,
-                fileUri: file.uri
-              }
-            },
-            {
-              text: userConfig.systemInstructions 
-                    + "\nFoque apenas neste vídeo. Descreva seu conteúdo de forma clara e detalhada.\n"
-                    + userPrompt
-            }
-        ];
-
-        const result = await model.generateContent(contentParts);
-        let response = result.response.text();
-        if (!response || typeof response !== 'string' || response.trim() === '') {
-            response = "Não consegui gerar uma descrição para este vídeo.";
-        }
-
-        await sendMessage(msg, response);
-        logger.info("Vídeo processado com sucesso!");
+        
+        logger.info(`Vídeo adicionado à fila com ID: ${jobId}`);
     } catch (error) {
         // Ainda registramos erros, mas apenas para vídeos que tentamos processar
         updateMessageStats('video', msg.author || msg.from, msg.chat?.id?._serialized, msg.chat?.isGroup, true);
         
         logger.error(`Erro ao processar mensagem de vídeo: ${error.message}`, { error });
         
-        let mensagemAmigavel = 'Desculpe, ocorreu um erro ao processar o vídeo.';
+        let mensagemAmigavel = 'Desculpe, ocorreu um erro ao adicionar seu vídeo à fila de processamento.';
         
         if (error.message.includes('too large')) {
             mensagemAmigavel = 'Ops! Este vídeo parece ser muito grande para eu processar. Poderia enviar uma versão menor ou comprimida?';
@@ -2046,6 +2017,7 @@ async function sendMessage(msg, text) {
 
         let trimmedText = text.trim();
         trimmedText = trimmedText.replace(/^(?:amélie:[\s]*)+/i, '');
+        trimmedText = trimmedText.replace(/^(?:amelie:[\s]*)+/i, '');
         trimmedText = trimmedText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n{3,}/g, '\n\n');
 
         // Obter informações do remetente e do chat
@@ -2080,6 +2052,120 @@ async function sendMessage(msg, text) {
             'Desculpe, ocorreu um erro ao enviar a resposta. Por favor, tente novamente.');
     }
 }
+
+// Configurar processador de vídeos integrado
+videoQueue.process('process-video', async (job) => {
+    const { tempFilename, chatId, messageId, mimeType, userPrompt, senderNumber } = job.data;
+    
+    try {
+      logger.info(`Processando vídeo: ${tempFilename} (Job ${job.id})`);
+      
+      // Verificar se o arquivo ainda existe
+      if (!fs.existsSync(tempFilename)) {
+        throw new Error("Arquivo temporário do vídeo não encontrado");
+      }
+      
+      // Fazer upload para o Google AI
+      const uploadResponse = await fileManager.uploadFile(tempFilename, {
+        mimeType: mimeType,
+        displayName: "Vídeo Enviado"
+      });
+  
+      // Aguardar processamento
+      let file = await fileManager.getFile(uploadResponse.file.name);
+      let retries = 0;
+      
+      // Aguardamos apenas se estiver PROCESSING
+      while (file.state === "PROCESSING" && retries < 12) {
+        logger.info(`Vídeo ainda em processamento, aguardando... (tentativa ${retries + 1})`);
+        await new Promise(resolve => setTimeout(resolve, 10000));
+        file = await fileManager.getFile(uploadResponse.file.name);
+        retries++;
+      }
+  
+      if (file.state === "FAILED") {
+        throw new Error("Falha no processamento do vídeo pelo Google AI");
+      }
+      
+      // Aqui aceitamos SUCCEEDED ou ACTIVE como estados válidos de conclusão
+      if (file.state !== "SUCCEEDED" && file.state !== "ACTIVE") {
+        throw new Error(`Estado inesperado do arquivo: ${file.state}`);
+      }
+  
+      // Obter configurações do usuário
+      const userConfig = await getConfig(chatId);
+      
+      // Obter modelo
+      const model = getOrCreateModel({
+        model: "gemini-2.0-flash",
+        temperature: userConfig.temperature,
+        topK: userConfig.topK,
+        topP: userConfig.topP,
+        maxOutputTokens: userConfig.maxOutputTokens,
+        systemInstruction: userConfig.systemInstructions
+      });
+  
+      // Preparar partes de conteúdo
+      const contentParts = [
+        {
+          fileData: {
+            mimeType: file.mimeType,
+            fileUri: file.uri
+          }
+        },
+        {
+          text: (userConfig.systemInstructions || "") 
+            + "\nFoque apenas neste vídeo. Descreva seu conteúdo de forma clara e detalhada.\n"
+            + userPrompt
+        }
+      ];
+  
+      // Gerar conteúdo
+      const result = await model.generateContent(contentParts);
+      let response = result.response.text();
+      
+      if (!response || typeof response !== 'string' || response.trim() === '') {
+        response = "Não consegui gerar uma descrição clara para este vídeo.";
+      }
+      
+      // Formatar resposta
+      const finalResponse = `✅ *Análise do seu vídeo:*\n\n${response}\n\n_(Processado em ${Math.floor((Date.now() - job.processedOn) / 1000)}s)_`;
+      
+      // Enviar resultado - usando o cliente principal já autenticado!
+      await client.sendMessage(senderNumber, finalResponse);
+      
+      // Limpar arquivo temporário
+      if (fs.existsSync(tempFilename)) {
+        fs.unlinkSync(tempFilename);
+        logger.info(`Arquivo temporário ${tempFilename} removido após processamento bem-sucedido`);
+      }
+      
+      logger.info(`Vídeo processado com sucesso: ${job.id}`);
+      
+      return { success: true };
+    } catch (error) {
+      logger.error(`Erro ao processar vídeo na fila: ${error.message}`, { error, jobId: job.id });
+      
+      // Notifica o usuário sobre o erro
+      try {
+        const errorMessage = getErrorMessageForUser(error);
+        await client.sendMessage(senderNumber, errorMessage);
+      } catch (err) {
+        logger.error(`Não consegui notificar sobre o erro: ${err.message}`);
+      }
+      
+      // Limpar arquivo temporário em caso de erro
+      if (fs.existsSync(tempFilename)) {
+        fs.unlinkSync(tempFilename);
+        logger.info(`Arquivo temporário ${tempFilename} removido após erro`);
+      }
+      
+      throw error; // Repropaga o erro para a fila lidar com ele
+    }
+  });
+  
+  // Log de inicialização
+  logger.info('Sistema de processamento de vídeos em fila inicializado');
 
 // Inicializa o cliente e configura tratamento de erros
 client.initialize();

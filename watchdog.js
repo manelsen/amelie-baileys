@@ -6,8 +6,9 @@ const { cleanRestart } = require('./whatsapp-restart');
 // Configurações
 const LOG_FILE = './bot.log';
 const ERROR_LOG_FILE = './error.log';
-const MAX_INACTIVE_TIME = 3 * 60 * 1000; // 3 minutos
-const CHECK_INTERVAL = 30 * 1000; // 30 segundos
+const MAX_ERRORS = 100;
+const MAX_INACTIVE_TIME = 1 * 60 * 1000; // 1 minuto
+const CHECK_INTERVAL = 20 * 1000; // 20 segundos
 const ERROR_PATTERNS = [
   'Cannot read properties of undefined (reading',
   'widFactory',
@@ -44,9 +45,8 @@ function checkLogs() {
         errorCount++;
         console.log(`Detectados erros do WhatsApp (contagem: ${errorCount})`);
         
-        // Se tivermos 10+ erros ou o último restart foi há mais de 10 minutos
-        const timeSinceLastRestart = Date.now() - lastCleanRestartTime;
-        if (errorCount >= 10 || timeSinceLastRestart > 10 * 60 * 1000) {
+        // Se tivermos mais erros que o configurado
+        if (errorCount >= MAX_ERRORS {
           console.log('Múltiplos erros do WhatsApp detectados! Executando reinicialização limpa...');
           cleanRestart();
           lastCleanRestartTime = Date.now();
