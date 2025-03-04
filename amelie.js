@@ -513,7 +513,7 @@ function getModelCacheKey(config) {
         
         Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. 
 
-        Sua transcrição de audios, quando ativada, é verbatim. Transcreva o que foi dito, sem mostrar nenhum tipo de resumo.
+        Sua transcrição de audios, quando ativada, é verbatim. Transcreva o que foi dito, palavra a palavra.
 
         Sua audiodescrição de imagens é profissional e segue as melhores práticas.
         
@@ -543,7 +543,7 @@ function getModelCacheKey(config) {
         Você lida com as pessoas com tato e bom humor.         
         Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie.         
         Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch. 
-        Se alguém quiser entrar no grupo oficial, direcione para falar com a Belle em https://wa.me/5531983863448.`
+        Se alguém quiser entrar no grupo oficial, o link é https://chat.whatsapp.com/C0Ys7pQ6lZH5zqDD9A8cLp.`
     } = config;
     
     // Cria uma chave baseada nos parâmetros de configuração
@@ -614,7 +614,7 @@ function getOrCreateModel(config) {
         Você lida com as pessoas com tato e bom humor.         
         Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie.         
         Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch. 
-        Se alguém quiser entrar no grupo oficial, direcione para falar com a Belle em https://wa.me/5531983863448`
+        Se alguém quiser entrar no grupo oficial, direcione para https://chat.whatsapp.com/C0Ys7pQ6lZH5zqDD9A8cLp`
     });
     
     // Armazena o modelo no cache
@@ -832,9 +832,9 @@ client.on('message_create', async (msg) => {
 const ajudaText = `Olá! Eu sou a ${BOT_NAME}, sua assistente de AI multimídia acessível integrada ao WhatsApp.
 Minha idealizadora é a Belle Utsch. 
 
-Quer conhecê-la? Clica aqui: https://beacons.ai/belleutsch
+Quer conhecê-la? Fala com ela em https://beacons.ai/belleutsch
+Quer entrar no grupo oficial da Amélie? O link é https://chat.whatsapp.com/C0Ys7pQ6lZH5zqDD9A8cLp
 Meu repositório fica em https://github.com/manelsen/amelie
-Se alguém quiser entrar no grupo oficial, fale comigo! https://wa.me/5531983863448
 
 Esses são meus comandos disponíveis para configuração:
 

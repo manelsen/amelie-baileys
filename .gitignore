@@ -10,3 +10,5 @@ temp_*
 logs/*
 *.mp4
 backup*
+auth_info_multi/
+package-lock.json
