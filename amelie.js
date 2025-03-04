@@ -1448,7 +1448,18 @@ async function handleImageMessage(msg, imageData, chatId) {
         // Atualiza estatísticas SOMENTE se for processar a imagem
         updateMessageStats('image', sender, chatId, chat.isGroup);
 
-        let userPrompt = "Descreva esta imagem em detalhes, focando apenas no que você vê com certeza. Se não tiver certeza sobre algo, não mencione.";
+        let userPrompt = `Analise esta imagem de forma extremamente detalhada para pessoas com deficiência visual.
+Inclua:
+1. Número exato de pessoas, suas posições e roupas (cores, tipos)
+2. Ambiente e cenário completo, em todos os planos
+3. Todos os objetos visíveis 
+4. Movimentos e ações detalhadas
+5. Expressões faciais
+6. Textos visíveis
+7. Qualquer outro detalhe relevante
+
+Crie uma descrição organizada e acessível.`;
+
         if (msg.body && msg.body.trim() !== '') {
             userPrompt = msg.body.trim();
         }
@@ -1559,7 +1570,17 @@ async function handleVideoMessage(msg, videoData, chatId) {
         // Enviar feedback inicial sobre o processamento
         await msg.reply("Estou colocando seu vídeo na fila de processamento! Você receberá o resultado em breve... ✨");
 
-        let userPrompt = "Descreva detalhadamente o conteúdo deste vídeo. Foque em informações visuais, áudio, e contexto geral.";
+        let userPrompt = `Analise este vídeo de forma extremamente detalhada para pessoas com deficiência visual.
+Inclua:
+1. Número exato de pessoas, suas posições e roupas (cores, tipos)
+2. Ambiente e cenário completo
+3. Todos os objetos visíveis 
+4. Movimentos e ações detalhadas
+5. Expressões faciais
+6. Textos visíveis
+7. Qualquer outro detalhe relevante
+
+Crie uma descrição organizada e acessível.`;;
         if (msg.body && msg.body.trim() !== '') {
             userPrompt = msg.body.trim();
         }
