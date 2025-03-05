@@ -20,7 +20,8 @@ const Datastore               = require('nedb');
 const crypto                  = require('crypto');
 const fs                      = require('fs');
 const path                    = require('path');
-const { videoQueue, problemVideosQueue, getErrorMessageForUser } = require('./videoQueue');
+const { videoQueue, problemVideosQueue, getErrorMessageForUser, notificacoes } = require('./videoQueue');
+const HeartbeatSystem = require('./heartbeat');
 
 
 dotenv.config();
@@ -28,415 +29,57 @@ dotenv.config();
 // Configuração de variáveis de ambiente
 const API_KEY                 = process.env.API_KEY;
 const MAX_HISTORY             = parseInt(process.env.MAX_HISTORY || '50');
-
 let BOT_NAME                  = process.env.BOT_NAME || 'Amélie';
+
 let lastProcessedAudio        = null;
 let reconnectCount            = 0;
 const MAX_RECONNECT_ATTEMPTS  = 5;
 
-/**
- * Sistema de monitoramento de saúde para Amélie
- * Rastreia estatísticas de uso, desempenho e erros
- */
-const botStats = {
-  startTime: Date.now(),
-  messagesProcessed: {
-    total: 0,
-    text: 0,
-    image: 0,
-    video: 0,
-    audio: 0,
-    commands: 0
-  },
-  uniqueUsers: new Set(), // IDs de usuários únicos
-  groups: new Set(),      // IDs de grupos únicos
-  privatechats: new Set(), // IDs de chats privados
-  errors: {
-    total: 0,
-    text: 0,
-    image: 0,
-    video: 0, 
-    audio: 0,
-    other: 0
-  },
-  lastResetTime: Date.now()
-};
+let debug_level               = 'info'
 
-/**
- * Atualiza estatísticas quando uma mensagem é processada
- * @param {string} messageType - Tipo de mensagem (text, image, video, audio, command)
- * @param {string} userId - ID do usuário
- * @param {string} chatId - ID do chat
- * @param {boolean} isGroup - Se é um grupo ou chat privado
- * @param {boolean} isError - Se ocorreu um erro no processamento
- */
-function updateMessageStats(messageType, userId, chatId, isGroup, isError = false) {
-  // Incrementa contagem total de mensagens
-  botStats.messagesProcessed.total++;
-  
-  // Incrementa contador específico do tipo de mensagem
-  if (messageType in botStats.messagesProcessed) {
-    botStats.messagesProcessed[messageType]++;
-  }
-  
-  // Adiciona usuário ao conjunto de usuários únicos
-  if (userId) {
-    botStats.uniqueUsers.add(userId);
-  }
-  
-  // Adiciona chat ao conjunto apropriado (grupo ou privado)
-  if (chatId) {
-    if (isGroup) {
-      botStats.groups.add(chatId);
-    } else {
-      botStats.privatechats.add(chatId);
-    }
-  }
-  
-  // Registra erros, se houver
-  if (isError) {
-    botStats.errors.total++;
-    if (messageType in botStats.errors) {
-      botStats.errors[messageType]++;
-    } else {
-      botStats.errors.other++;
-    }
-  }
-}
-
-/**
- * Gera relatório completo de estatísticas
- * @returns {string} Relatório formatado
- */
-function generateStatsReport() {
-  const uptime = (Date.now() - botStats.startTime) / (1000 * 60 * 60); // horas
-  const uptimeDays = uptime / 24;
-  
-  return `📊 STATUS DA ASSISTENTE APÓS ${uptime.toFixed(2)}h ONLINE (${uptimeDays.toFixed(2)} dias):
-  
-🌍 ALCANCE:
-- Grupos ativos: ${botStats.groups.size}
-- Chats privados: ${botStats.privatechats.size}
-- Usuários únicos atendidos: ${botStats.uniqueUsers.size}
-
-📝 MENSAGENS PROCESSADAS:
-- Total: ${botStats.messagesProcessed.total}
-- Texto: ${botStats.messagesProcessed.text}
-- Imagens: ${botStats.messagesProcessed.image}
-- Vídeos: ${botStats.messagesProcessed.video}
-- Áudios: ${botStats.messagesProcessed.audio}
-- Comandos: ${botStats.messagesProcessed.commands}
-
-⚙️ DESEMPENHO:
-- Taxa de erro: ${(botStats.errors.total/Math.max(botStats.messagesProcessed.total,1)*100).toFixed(2)}%
-- Memória em uso: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(process.memoryUsage().heapTotal / 1024 / 1024)}MB
-- Conexão: ${client?.info?.connected ? 'Estável' : 'Instável'}
-
-❌ ERROS:
-- Total: ${botStats.errors.total}
-- Texto: ${botStats.errors.text}
-- Imagens: ${botStats.errors.image}
-- Vídeos: ${botStats.errors.video}
-- Áudios: ${botStats.errors.audio}
-- Outros: ${botStats.errors.other}`;
-}
-
-/**
- * Obtém estatísticas detalhadas do banco de dados
- * @returns {Promise<string>} Estatísticas do banco de dados formatadas
- * @async
- */
-async function getDetailedDatabaseStats() {
-  try {
-    // Estatísticas de grupos
-    const groupCount = await new Promise((resolve, reject) => {
-      groupsDb.count({}, (err, count) => {
-        if (err) reject(err);
-        else resolve(count);
-      });
-    });
+// Sistema de Circuit Breaker para proteger contra falhas na API
+const circuitBreaker = {
+    failures: 0,
+    lastFailure: 0,
+    state: 'CLOSED', // CLOSED, OPEN, HALF_OPEN
+    threshold: 5, // Número de falhas para abrir o circuito
+    resetTimeout: 60000, // 1 minuto para resetar
     
-    // Estatísticas de usuários
-    const userCount = await new Promise((resolve, reject) => {
-      usersDb.count({}, (err, count) => {
-        if (err) reject(err);
-        else resolve(count);
-      });
-    });
+    recordSuccess() {
+        this.failures = 0;
+        this.state = 'CLOSED';
+    },
     
-    // Estatísticas de prompts
-    const promptCount = await new Promise((resolve, reject) => {
-      promptsDb.count({}, (err, count) => {
-        if (err) reject(err);
-        else resolve(count);
-      });
-    });
-    
-    return `📁 ESTATÍSTICAS DE BANCO DE DADOS:
-- Grupos registrados: ${groupCount}
-- Usuários registrados: ${userCount}
-- Prompts personalizados: ${promptCount}`;
-  } catch (error) {
-    logger.error('Erro ao obter estatísticas detalhadas:', error);
-    return "Erro ao obter estatísticas detalhadas do banco de dados";
-  }
-}
-
-/**
- * Obtém estatísticas detalhadas dos grupos ativos
- * @returns {Promise<string>} Estatísticas de grupos formatadas
- * @async
- */
-async function getActiveGroupStats() {
-  try {
-    const chats = await client.getChats();
-    const groups = chats.filter(chat => chat.isGroup);
-    
-    let groupStats = `👥 DETALHES DOS GRUPOS ATIVOS (${groups.length}):`;
-    let count = 0;
-    
-    for (const group of groups) {
-      if (count++ < 10) { // Limita a 10 grupos para não sobrecarregar a mensagem
-        const participantCount = group.participants ? group.participants.length : "N/A";
-        groupStats += `\n- ${group.name} (${participantCount} participantes)`;
-      }
-    }
-    
-    if (groups.length > 10) {
-      groupStats += `\n- ... e ${groups.length - 10} outros grupos`;
-    }
-    
-    return groupStats;
-  } catch (error) {
-    logger.error('Erro ao obter estatísticas de grupos:', error);
-    return "Erro ao obter estatísticas de grupos ativos";
-  }
-}
-
-/**
- * Salva estatísticas em arquivo para persistência
- * @async
- */
-async function saveStats() {
-    try {
-      // Convert Sets to arrays for serialization
-      const statsToSave = {
-        startTime: botStats.startTime,
-        messagesProcessed: botStats.messagesProcessed,
-        uniqueUsers: Array.from(botStats.uniqueUsers),  // Save actual IDs
-        groups: Array.from(botStats.groups),           // Save actual IDs
-        privatechats: Array.from(botStats.privatechats), // Save actual IDs
-        errors: botStats.errors,
-        lastResetTime: botStats.lastResetTime,
-        lastSaveTime: Date.now()
-      };
-    
-    if (!fs.existsSync('./db')) {
-      fs.mkdirSync('./db', { recursive: true });
-    }
-    
-    fs.writeFileSync(
-      './db/stats.json', 
-      JSON.stringify(statsToSave, null, 2)
-    );
-    
-    logger.info('Estatísticas salvas com sucesso');
-  } catch (error) {
-    logger.error('Erro ao salvar estatísticas:', error);
-  }
-}
-
-/**
- * Carrega estatísticas de arquivo persistente
- * @async
- */
-async function loadStats() {
-    try {
-      if (fs.existsSync('./db/stats.json')) {
-        const savedStats = JSON.parse(fs.readFileSync('./db/stats.json', 'utf8'));
+    recordFailure() {
+        this.failures++;
+        this.lastFailure = Date.now();
         
-        // Restore counters
-        botStats.startTime = savedStats.startTime || Date.now();
-        botStats.messagesProcessed = savedStats.messagesProcessed || botStats.messagesProcessed;
-        botStats.errors = savedStats.errors || botStats.errors;
-        botStats.lastResetTime = savedStats.lastResetTime || Date.now();
-        
-        // Restore Sets from arrays if available
-        if (savedStats.uniqueUsers && Array.isArray(savedStats.uniqueUsers)) {
-          savedStats.uniqueUsers.forEach(id => botStats.uniqueUsers.add(id));
-          logger.info(`Carregados ${savedStats.uniqueUsers.length} usuários de estatísticas anteriores`);
+        if (this.failures >= this.threshold) {
+            this.state = 'OPEN';
+            logger.warn(`⚠️ Circuit breaker aberto após ${this.failures} falhas!`);
         }
-        
-        if (savedStats.groups && Array.isArray(savedStats.groups)) {
-          savedStats.groups.forEach(id => botStats.groups.add(id));
-          logger.info(`Carregados ${savedStats.groups.length} grupos de estatísticas anteriores`);
-        }
-        
-        if (savedStats.privatechats && Array.isArray(savedStats.privatechats)) {
-          savedStats.privatechats.forEach(id => botStats.privatechats.add(id));
-          logger.info(`Carregados ${savedStats.privatechats.length} chats privados de estatísticas anteriores`);
-        }
-        
-        logger.info('Estatísticas anteriores carregadas com sucesso');
-        logger.info(`Mensagens processadas anteriormente: ${botStats.messagesProcessed.total}`);
-      } else {
-        logger.info('Nenhuma estatística anterior encontrada. Iniciando novos contadores.');
-      }
-    } catch (error) {
-      logger.error('Erro ao carregar estatísticas:', error);
-    }
-  }
-
-/**
- * Inicializa o sistema de monitoramento de estatísticas
- * @async
- */
-async function initializeStatsMonitoring() {
-  // Carrega estatísticas anteriores
-  await loadStats();
-  
-  // Preenche conjuntos de grupos e usuários a partir do banco de dados
-  await populateExistingEntities();
-  
-  // Programa relatórios periódicos
-  setInterval(async () => {
-    const statsReport = generateStatsReport();
-    const dbStats = await getDetailedDatabaseStats();
+    },
     
-    const fullReport = `${statsReport}\n\n${dbStats}`;
-    
-    logger.info(fullReport);
-    
-    // Envia para administrador, se configurado
-    const adminNumber = process.env.ADMIN_NUMBER;
-    if (adminNumber) {
-      try {
-        await client.sendMessage(adminNumber, fullReport);
-      } catch (error) {
-        logger.error('Erro ao enviar relatório para admin:', error);
-      }
-    }
-    
-    // Salva estatísticas periodicamente
-    await saveStats();
-  }, 60 * 60 * 1000); // A cada hora
-    
-  // Salva estatísticas antes de desligar
-  process.on('SIGINT', async () => {
-    logger.info('Salvando estatísticas antes de encerrar...');
-    await saveStats();
-    process.exit(0);
-  });
-  
-  // Salva estatísticas de backup a cada hora
-  setInterval(async () => {
-    await saveStats();
-  //}, 60 * 60 * 1000); uma hora
-  }, 60 * 60 * 1000); // um minuto
-  
-  logger.info('Sistema de monitoramento de estatísticas inicializado');
-}
-
-/**
- * Preenche conjuntos de entidades existentes a partir do banco de dados e WhatsApp
- * @async
- */
-async function populateExistingEntities() {
-    try {
-      // Load existing users from database - your existing code
-      
-      // Improved group loading
-      logger.info("Tentando carregar grupos ativos do WhatsApp...");
-      try {
-        const chats = await client.getChats();
-        let groupCount = 0;
-        let privateCount = 0;
+    canExecute() {
+        if (this.state === 'CLOSED') return true;
         
-        for (const chat of chats) {
-          const chatId = chat.id._serialized;
-          if (chat.isGroup) {
-            botStats.groups.add(chatId);
-            groupCount++;
-          } else {
-            botStats.privatechats.add(chatId);
-            privateCount++;
-          }
-        }
-        
-        logger.info(`Carregados ${groupCount} grupos e ${privateCount} chats privados ativos do WhatsApp`);
-        
-        // If no groups were found via WhatsApp API, try the database as backup
-        if (groupCount === 0) {
-          logger.info("Nenhum grupo encontrado via API do WhatsApp, tentando banco de dados...");
-          groupsDb.find({}, (err, groups) => {
-            if (!err && groups && groups.length > 0) {
-              groups.forEach(group => botStats.groups.add(group.id));
-              logger.info(`Fallback: Carregados ${groups.length} grupos do banco de dados`);
-            } else {
-              logger.warn("Nenhum grupo encontrado no banco de dados também.");
+        if (this.state === 'OPEN') {
+            if (Date.now() - this.lastFailure > this.resetTimeout) {
+                this.state = 'HALF_OPEN';
+                logger.info(`Circuit breaker passando para estado HALF_OPEN`);
+                return true;
             }
-          });
+            return false;
         }
-      } catch (error) {
-        logger.error('Erro ao carregar chats do WhatsApp:', error);
         
-        // Fallback to database
-        groupsDb.find({}, (err, groups) => {
-          if (!err && groups) {
-            groups.forEach(group => botStats.groups.add(group.id));
-            logger.info(`Fallback: Carregados ${groups.length} grupos do banco de dados`);
-          }
-        });
-      }
-    } catch (error) {
-      logger.error('Erro ao popular entidades existentes:', error);
+        return true; // HALF_OPEN - permite uma tentativa
     }
-  }
-
-/**
- * Obtém estatísticas específicas para exibição ao usuário
- * @returns {string} Estatísticas formatadas para exibição
- */
-function getUserFacingStats() {
-  const uptime = (Date.now() - botStats.startTime) / (1000 * 60 * 60 * 24); // dias
-  
-  return `📊 Estatísticas da Assistente:
-
-🤖 Em operação há ${uptime.toFixed(1)} dias (desde o último reboot!)
-👥 Ajudando ${botStats.uniqueUsers.size} usuários diferentes
-📝 Processou ${botStats.messagesProcessed.total} mensagens
-🖼️ Descreveu ${botStats.messagesProcessed.image} imagens
-🎬 Interpretou ${botStats.messagesProcessed.video} vídeos
-🔊 Transcreveu ${botStats.messagesProcessed.audio} áudios`;
-}
-
-/**
- * Obtém informações da pilha de chamadas para log
- * @returns {string} Informação de arquivo e linha para o log
- */
-function getStackInfo() {
-    const originalFunc = Error.prepareStackTrace;
-
-    try {
-        const err = new Error();
-        Error.prepareStackTrace = (_, stack) => stack;
-        const stack = err.stack;
-        Error.prepareStackTrace = originalFunc;
-
-        const caller = stack[2];
-        const fileName = path.basename(caller.getFileName());
-        const lineNumber = caller.getLineNumber();
-        return `${fileName}:${lineNumber}`;
-    } catch (e) {
-        return '';
-    }
-}
+};
 
 /**
  * Configuração de formato personalizado para o logger
  */
 const myFormat = winston.format.printf(({ timestamp, level, message, ...rest }) => {
-    const lineInfo = getStackInfo();
     const extraData = Object.keys(rest).length ? JSON.stringify(rest, null, 2) : '';
     
     // Usar expressões regulares para colorir apenas partes específicas
@@ -461,7 +104,7 @@ const myFormat = winston.format.printf(({ timestamp, level, message, ...rest }) 
  * Configuração do logger com saída para console e arquivo
  */
 const logger = winston.createLogger({
-    level: 'info',
+    level: debug_level,
     format: winston.format.combine(
         winston.format.timestamp(),
         myFormat
@@ -469,7 +112,11 @@ const logger = winston.createLogger({
     transports: [
         new winston.transports.Console({
             format: winston.format.combine(
-                winston.format.timestamp(),
+                winston.format.timestamp(
+                    {
+                        format: 'DD/MM/YYYY HH:mm:ss'
+                    }
+                ),
                 myFormat
             )
         }),
@@ -498,6 +145,16 @@ const genAI = new GoogleGenerativeAI(API_KEY);
 
 // Cache para armazenar instâncias do modelo
 const modelCache = new Map();
+
+/**
+ * Verifica se o cliente do WhatsApp está conectado e pronto
+ * @returns {boolean} Verdadeiro se o cliente estiver pronto
+ */
+function isClientReady() {
+    return client && client.info && client.info.wid && 
+           client.info.connected === true && 
+           client.pupPage && client.pupBrowser;
+}
 
 /**
  * Gera uma chave única baseada nas configurações do modelo
@@ -558,39 +215,43 @@ function getModelCacheKey(config) {
  * @returns {Object} Instância do modelo Gemini
  */
 function getOrCreateModel(config) {
+    if (!circuitBreaker.canExecute()) {
+        logger.warn(`Requisição de modelo bloqueada pelo circuit breaker (estado: ${circuitBreaker.state})`);
+        throw new Error("Serviço temporariamente indisponível - muitas falhas recentes");
+    }
+    
     const cacheKey = getModelCacheKey(config);
     
-    // Verifica se já existe um modelo com essas configurações
     if (modelCache.has(cacheKey)) {
         logger.debug(`Usando modelo em cache com chave: ${cacheKey}`);
         return modelCache.get(cacheKey);
     }
     
-    // Caso contrário, cria um novo modelo
     logger.debug(`Criando novo modelo com chave: ${cacheKey}`);
-    const newModel = genAI.getGenerativeModel({
-        model: config.model || "gemini-2.0-flash",
-        generationConfig: {
-            temperature: config.temperature || 0.9,
-            topK: config.topK || 1,
-            topP: config.topP || 0.95,
-            maxOutputTokens: config.maxOutputTokens || 1024,
-        },
-        safetySettings: [
-            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-        ],
-        systemInstruction: config.systemInstruction || `Seu nome é ${BOT_NAME}. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. 
-        
-        Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. 
+    try {
+        const newModel = genAI.getGenerativeModel({
+            model: config.model || "gemini-2.0-flash",
+            generationConfig: {
+                temperature: config.temperature || 0.9,
+                topK: config.topK || 1,
+                topP: config.topP || 0.95,
+                maxOutputTokens: config.maxOutputTokens || 1024,
+            },
+            safetySettings: [
+                { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+            ],
+            systemInstruction: config.systemInstruction || `Seu nome é ${BOT_NAME}. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. 
+            
+            Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. 
 
-        Sua transcrição de audios, quando ativada, é verbatim. Transcreva o que foi dito.
+            Sua transcrição de audios, quando ativada, é verbatim. Transcreva o que foi dito.
 
-        Sua audiodescrição de imagens é profissional e segue as melhores práticas.
-        
-        Seus comandos podem ser encontrados digitando !ajuda. 
+            Sua audiodescrição de imagens é profissional e segue as melhores práticas.
+            
+            Seus comandos podem ser encontrados digitando !ajuda.
         
         Se alguém perguntar, aqui está sua lista de comandos: 
         !cego - Aplica configurações para usuários com deficiência visual; 
@@ -619,10 +280,9 @@ function getOrCreateModel(config) {
         Se alguém quiser entrar no grupo oficial, direcione para https://chat.whatsapp.com/C0Ys7pQ6lZH5zqDD9A8cLp`
     });
     
-    // Armazena o modelo no cache
+    circuitBreaker.recordSuccess();
     modelCache.set(cacheKey, newModel);
     
-    // Limita o tamanho do cache para evitar uso excessivo de memória
     if (modelCache.size > 10) {
         const oldestKey = modelCache.keys().next().value;
         modelCache.delete(oldestKey);
@@ -630,6 +290,10 @@ function getOrCreateModel(config) {
     }
     
     return newModel;
+} catch (error) {
+    circuitBreaker.recordFailure();
+    throw error;
+}
 }
 
 // Inicialização do modelo Gemini padrão
@@ -684,19 +348,47 @@ async function initializeBot() {
         await loadConfigOnStartup();
         logger.info('Todas as configurações foram carregadas com sucesso');
         
-        // Inicializa sistema de monitoramento
-        await initializeStatsMonitoring();
+        // Limites de memória (em MB)
+        const MEMORY_WARNING_THRESHOLD = 1024; // 1GB 
+        const MEMORY_CRITICAL_THRESHOLD = 1536; // 1.5GB
         
-        // Monitoramento periódico de uso de memória
+        // Monitoramento mais frequente
         setInterval(() => {
             const memoryUsage = process.memoryUsage();
+            const heapUsedMB = Math.round(memoryUsage.heapUsed / 1024 / 1024);
+            const rssMB = Math.round(memoryUsage.rss / 1024 / 1024);
+            
+            // Log normal
             logger.info(`Uso de memória: ${JSON.stringify({
-                rss: `${Math.round(memoryUsage.rss / 1024 / 1024)}MB`,
+                rss: `${rssMB}MB`,
                 heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`,
-                heapUsed: `${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB`,
+                heapUsed: `${heapUsedMB}MB`,
                 external: `${Math.round(memoryUsage.external / 1024 / 1024)}MB`
             })}`);
-        }, 30 * 60 * 1000); // A cada 30 minutos
+            
+            // Verificação de thresholds
+            if (rssMB > MEMORY_CRITICAL_THRESHOLD || heapUsedMB > MEMORY_CRITICAL_THRESHOLD) {
+                logger.error(`⚠️ ALERTA CRÍTICO: Uso de memória excedeu limite crítico! RSS: ${rssMB}MB, Heap: ${heapUsedMB}MB`);
+                
+                // Limpar caches para reduzir memória
+                modelCache.clear();
+                logger.info("Cache de modelos limpo devido ao uso crítico de memória");
+                
+                // Em casos extremos, forçar coleta de lixo
+                global.gc && global.gc();
+            } 
+            else if (rssMB > MEMORY_WARNING_THRESHOLD || heapUsedMB > MEMORY_WARNING_THRESHOLD) {
+                logger.warn(`⚠️ ALERTA: Alto uso de memória detectado! RSS: ${rssMB}MB, Heap: ${heapUsedMB}MB`);
+                
+                // Limpar parte do cache se estiver grande
+                if (modelCache.size > 5) {
+                    // Remover metade dos modelos
+                    const keysToRemove = Array.from(modelCache.keys()).slice(0, Math.floor(modelCache.size / 2));
+                    keysToRemove.forEach(key => modelCache.delete(key));
+                    logger.info(`Cache de modelos reduzido de ${modelCache.size + keysToRemove.length} para ${modelCache.size}`);
+                }
+            }
+        }, 5 * 60 * 1000); // A cada 5 minutos
         
     } catch (error) {
         logger.error('Erro ao carregar configurações:', error);
@@ -733,7 +425,6 @@ client.on('message_create', async (msg) => {
         await chat.sendSeen();
 
         const isGroup = chat.id._serialized.endsWith('@g.us');
-        logger.debug(`Verificação de grupo pelo ID: ${isGroup ? 'É GRUPO' : 'É PRIVADO'}`);
 
         let groupInfo = '';
         if (isGroup) {
@@ -750,7 +441,6 @@ client.on('message_create', async (msg) => {
 
         if (isCommand) {
             logger.debug("Processando comando...");
-            updateMessageStats('commands', msg.author, chatId, isGroup);
             await handleCommand(msg, chatId);
             return;
         }
@@ -858,7 +548,6 @@ Esses são meus comandos disponíveis para configuração:
 !config get [param] - Mostra a configuração atual
 
 !users - Lista os usuários do grupo
-!stats - Mostra estatísticas de uso
 
 !ajuda - Mostra esta mensagem de ajuda`;
 
@@ -944,10 +633,6 @@ async function handleCommand(msg, chatId) {
             case 'audio':  await handleMediaToggleCommand(msg, chatId, 'mediaAudio', 'transcrição de áudio'); break;
             case 'video':  await handleMediaToggleCommand(msg, chatId, 'mediaVideo', 'interpretação de vídeo'); break;
             case 'imagem': await handleMediaToggleCommand(msg, chatId, 'mediaImage', 'audiodescrição de imagem'); break;
-            case 'stats':
-            case 'estatisticas':
-                await handleStatsCommand(msg);
-                break;
             default:
                 await msg.reply(
                     'Comando desconhecido. Use !ajuda para ver os comandos disponíveis.'
@@ -957,18 +642,6 @@ async function handleCommand(msg, chatId) {
         logger.error(`Erro ao executar comando: ${error.message}`, { error });
         await msg.reply('Desculpe, ocorreu um erro ao executar o comando. Por favor, tente novamente.');
     }
-}
-
-/**
- * Processa o comando de estatísticas
- * @param {Object} msg - Mensagem recebida
- * @async
- */
-async function handleStatsCommand(msg) {
-    const stats = getUserFacingStats();
-    await msg.reply(stats);
-    
-    // Atualiza contador de comandos (já foi contabilizado no handler principal)
 }
 
 /**
@@ -1159,9 +832,6 @@ async function handleTextMessage(msg) {
         const sender = msg.author || msg.from;
         const senderName = sender.name;
         
-        // Atualiza estatísticas
-        updateMessageStats('text', sender, chatId, chat.isGroup);
-
         const user = await getOrCreateUser(sender, chat);
         const chatConfig = await getConfig(chatId);
 
@@ -1198,8 +868,6 @@ async function handleTextMessage(msg) {
             await sendMessage(msg, response);
         }
     } catch (error) {
-        // Atualiza estatísticas de erro
-        updateMessageStats('text', msg.author || msg.from, msg.chat?.id?._serialized, msg.chat?.isGroup, true);
         
         logger.error(`Erro ao processar mensagem de texto: ${error.message}`);
         await msg.reply('Desculpe, ocorreu um erro ao processar sua mensagem. Por favor, tente novamente.');
@@ -1239,7 +907,13 @@ async function generateResponseWithTextAndImage(userPrompt, imageData, chatId) {
             systemInstruction: userConfig.systemInstructions
         });
 
-        const result = await model.generateContent(contentParts);
+        // Adicionar timeout de 45 segundos
+        const resultPromise = model.generateContent(contentParts);
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error("Timeout da API Gemini")), 45000)
+        );
+        const result = await Promise.race([resultPromise, timeoutPromise]);
+        
         let responseText = result.response.text();
 
         if (!responseText) {
@@ -1363,16 +1037,11 @@ async function handleAudioMessage(msg, audioData, chatId) {
         const chat = await msg.getChat();
         const config = await getConfig(chatId);
         
-        // Verificação de configuração ANTES da atualização de estatísticas
         if (!config.mediaAudio) {
-            logger.debug(`Transcrição de áudio desabilitada para o chat ${chatId}. Ignorando mensagem de áudio.`);
             return;
         }
         
         const sender = msg.author || msg.from;
-        // Atualiza estatísticas SOMENTE se for processar o áudio
-        updateMessageStats('audio', sender, chatId, chat.isGroup);
-
         const audioSizeInMB = audioData.data.length / (1024 * 1024);
         if (audioSizeInMB > 20) {
             await msg.reply('Desculpe, só posso processar áudios de até 20MB.');
@@ -1418,9 +1087,6 @@ async function handleAudioMessage(msg, audioData, chatId) {
 
         logger.info(`Áudio processado com sucesso: ${audioHash}`);
     } catch (error) {
-        // Ainda registramos erros, mas apenas para áudios que tentamos processar
-        updateMessageStats('audio', msg.author || msg.from, msg.chat?.id?._serialized, msg.chat?.isGroup, true);
-        
         logger.error(`Erro ao processar mensagem de áudio: ${error.message}`, { error });
         await msg.reply('Desculpe, ocorreu um erro ao processar o áudio. Por favor, tente novamente.');
     }
@@ -1445,9 +1111,6 @@ async function handleImageMessage(msg, imageData, chatId) {
         }
         
         const sender = msg.author || msg.from;
-        // Atualiza estatísticas SOMENTE se for processar a imagem
-        updateMessageStats('image', sender, chatId, chat.isGroup);
-
         let userPrompt = `Analise esta imagem de forma extremamente detalhada para pessoas com deficiência visual.
 Inclua:
 1. Número exato de pessoas, suas posições e roupas (cores, tipos)
@@ -1537,9 +1200,6 @@ Crie uma descrição organizada e acessível.`;
         const response = await result.response.text();
         await sendMessage(msg, response);
     } catch (error) {
-        // Ainda registramos erros, mas apenas para imagens que tentamos processar
-        updateMessageStats('image', msg.author || msg.from, msg.chat?.id?._serialized, msg.chat?.isGroup, true);
-        
         logger.error(`Erro ao processar mensagem de imagem: ${error.message}`, { error });
         await msg.reply('Desculpe, ocorreu um erro ao processar a imagem. Por favor, tente novamente.');
     }
@@ -1552,68 +1212,127 @@ Crie uma descrição organizada e acessível.`;
  * @param {string} chatId - ID do chat
  * @async
  */
+/**
+ * Processa mensagens de vídeo
+ * @param {Object} msg - Mensagem recebida
+ * @param {Object} videoData - Dados do vídeo
+ * @param {string} chatId - ID do chat
+ * @async
+ */
+/**
+ * Processa mensagens de vídeo de forma assíncrona
+ * @param {Object} msg - Mensagem recebida
+ * @param {Object} videoData - Dados do vídeo
+ * @param {string} chatId - ID do chat
+ * @async
+ */
 async function handleVideoMessage(msg, videoData, chatId) {
     try {
         const chat = await msg.getChat();
         const config = await getConfig(chatId);
         
-        // Verificação de configuração ANTES da atualização de estatísticas
+        // Verificação de configuração
         if (!config.mediaVideo) {
             logger.info(`Descrição de vídeo desabilitada para o chat ${chatId}. Ignorando mensagem de vídeo.`);
             return;
         }
         
         const sender = msg.author || msg.from;
-        // Atualiza estatísticas SOMENTE se for processar o vídeo
-        updateMessageStats('video', sender, chatId, chat.isGroup);
         
-        // Enviar feedback inicial sobre o processamento
-        await msg.reply("Estou colocando seu vídeo na fila de processamento! Você receberá o resultado em breve... ✨");
-
+        // Enviar feedback inicial e seguir adiante
+        await msg.reply("✨ Estou colocando seu vídeo na fila de processamento! Você receberá o resultado em breve...");
+        
         let userPrompt = `Analise este vídeo de forma extremamente detalhada para pessoas com deficiência visual.
-Inclua:
-1. Número exato de pessoas, suas posições e roupas (cores, tipos)
-2. Ambiente e cenário completo
-3. Todos os objetos visíveis 
-4. Movimentos e ações detalhadas
-5. Expressões faciais
-6. Textos visíveis
-7. Qualquer outro detalhe relevante
+                        Inclua:
+                        1. Número exato de pessoas, suas posições e roupas (cores, tipos)
+                        2. Ambiente e cenário completo
+                        3. Todos os objetos visíveis 
+                        4. Movimentos e ações detalhadas
+                        5. Expressões faciais
+                        6. Textos visíveis
+                        7. Qualquer outro detalhe relevante
 
-Crie uma descrição organizada e acessível.`;;
+                        Crie uma descrição organizada e acessível.`;
+
         if (msg.body && msg.body.trim() !== '') {
             userPrompt = msg.body.trim();
         }
 
         // Garantir que o diretório de arquivos temporários existe
         if (!fs.existsSync('./temp')) {
-            fs.mkdirSync('./temp', { recursive: true });
+            try {
+                await fs.promises.mkdir('./temp', { recursive: true });
+                logger.info('Diretório de arquivos temporários criado');
+            } catch (dirError) {
+                logger.error(`Erro ao criar diretório: ${dirError.message}`);
+                await msg.reply('Desculpe, ocorreu um erro ao preparar o sistema. Por favor, tente novamente.');
+                return;
+            }
         }
         
-        // Cria um arquivo temporário para o vídeo
-        const tempFilename = `./temp/video_${Date.now()}.mp4`;
-        fs.writeFileSync(tempFilename, Buffer.from(videoData.data, 'base64'));
-        
-        // Adicionar à fila em vez de processar diretamente
+        // Cria um arquivo temporário para o vídeo com nome seguro
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const tempFilename = `./temp/video_${timestamp}_${Math.floor(Math.random() * 10000)}.mp4`;
         const jobId = `video_${chatId}_${Date.now()}`;
-        await videoQueue.add('process-video', {
-            tempFilename,
-            chatId,
-            messageId: msg.id._serialized,
-            mimeType: videoData.mimetype,
-            userPrompt,
-            senderNumber: msg.from
-        }, { 
-            jobId,
-            removeOnComplete: true,
-            removeOnFail: false
-        });
         
-        logger.info(`Vídeo adicionado à fila com ID: ${jobId}`);
+        try {
+            // MUDANÇA IMPORTANTE: Primeiro salvar o arquivo, depois adicionar à fila!
+            logger.info(`Salvando arquivo de vídeo ${tempFilename}...`);
+            const videoBuffer = Buffer.from(videoData.data, 'base64');
+            
+            // Salvar o arquivo COMPLETAMENTE antes de prosseguir
+            await fs.promises.writeFile(tempFilename, videoBuffer);
+            logger.info(`✅ Arquivo de vídeo salvo com sucesso: ${tempFilename} (${Math.round(videoBuffer.length / 1024)} KB)`);
+            
+            // Verificar se o arquivo realmente existe e tem tamanho correto
+            const stats = await fs.promises.stat(tempFilename);
+            if (stats.size !== videoBuffer.length) {
+                throw new Error(`Tamanho do arquivo salvo (${stats.size}) não corresponde ao buffer original (${videoBuffer.length})`);
+            }
+            
+            // DEPOIS que garantimos que o arquivo existe, adicionar à fila
+            await videoQueue.add('process-video', {
+                tempFilename,
+                chatId,
+                messageId: msg.id._serialized,
+                mimeType: videoData.mimetype,
+                userPrompt,
+                senderNumber: msg.from
+            }, { 
+                jobId,
+                removeOnComplete: true,
+                removeOnFail: false,
+                timeout: 300000 // 5 minutos
+            });
+            
+            logger.info(`🚀 Vídeo adicionado à fila com sucesso: ${tempFilename} (Job ${jobId})`);
+            
+            // Emitir heartbeat para manter o watchdog feliz
+            logger.info(`💓 Heartbeat ${new Date().toISOString()} - Sistema ativo`);
+            
+        } catch (processingError) {
+            logger.error(`❌ Erro ao processar vídeo: ${processingError.message}`);
+            
+            // Tentar notificar o usuário sobre o erro
+            await msg.reply("Ai, tive um probleminha com seu vídeo. Poderia tentar novamente?").catch(() => {});
+            
+            // Limpar arquivo se existir
+            if (fs.existsSync(tempFilename)) {
+                await fs.promises.unlink(tempFilename).catch(err => {
+                    logger.error(`Erro ao remover arquivo temporário: ${err.message}`);
+                });
+                logger.info(`Arquivo temporário ${tempFilename} removido após erro`);
+            }
+            
+            // Não propagar o erro para permitir que a Amélie continue funcionando
+            return;
+        }
+        
+        // AMÉLIE CONTINUA IMEDIATAMENTE! 💃
+        logger.info(`💃 Continuando a processar outras mensagens enquanto o vídeo é processado`);
+        return;
+        
     } catch (error) {
-        // Ainda registramos erros, mas apenas para vídeos que tentamos processar
-        updateMessageStats('video', msg.author || msg.from, msg.chat?.id?._serialized, msg.chat?.isGroup, true);
-        
         logger.error(`Erro ao processar mensagem de vídeo: ${error.message}`, { error });
         
         let mensagemAmigavel = 'Desculpe, ocorreu um erro ao adicionar seu vídeo à fila de processamento.';
@@ -1626,7 +1345,9 @@ Crie uma descrição organizada e acessível.`;;
             mensagemAmigavel = 'O processamento demorou mais que o esperado. Talvez o vídeo seja muito complexo?';
         }
         
-        await msg.reply(mensagemAmigavel);
+        await msg.reply(mensagemAmigavel).catch(replyError => {
+            logger.error(`Não consegui enviar mensagem de erro: ${replyError.message}`);
+        });
     }
 }
 
@@ -1649,7 +1370,13 @@ async function generateResponseWithText(userPrompt, chatId) {
         systemInstruction: userConfig.systemInstructions
       });
       
-      const result = await model.generateContent(userPrompt);
+      // Adicionar timeout de 45 segundos
+      const resultPromise = model.generateContent(userPrompt);
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Timeout da API Gemini")), 45000)
+      );
+      const result = await Promise.race([resultPromise, timeoutPromise]);
+      
       let responseText = result.response.text();
   
       if (!responseText) {
@@ -1705,59 +1432,6 @@ async function listGroupUsers(msg) {
         await msg.reply(`Usuários no grupo "${group.title}":\n${userList.join('\n')}`);
     } else {
         await msg.reply('Este comando só funciona em grupos.');
-    }
-}
-
-/**
- * Inicializa a assistente virtual carregando configurações
- * @async
- */
-async function initializeBot() {
-    try {
-        await loadConfigOnStartup();
-        logger.info('Todas as configurações foram carregadas com sucesso');
-        
-        // Inicializa sistema de monitoramento
-        await initializeStatsMonitoring();
-        
-        // Monitoramento periódico de uso de memória
-        setInterval(() => {
-            const memoryUsage = process.memoryUsage();
-            logger.info(`Uso de memória: ${JSON.stringify({
-                rss: `${Math.round(memoryUsage.rss / 1024 / 1024)}MB`,
-                heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`,
-                heapUsed: `${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB`,
-                external: `${Math.round(memoryUsage.external / 1024 / 1024)}MB`
-            })}`);
-        }, 30 * 60 * 1000); // A cada 30 minutos
-        
-        // Limpar arquivos temporários periodicamente
-        setInterval(() => {
-            // Limpar arquivos temporários esquecidos
-            const tempDir = path.join(__dirname, '.'); // ou pasta específica
-            fs.readdir(tempDir, (err, files) => {
-                if (err) return;
-                const videoFiles = files.filter(f => f.startsWith('video_') && f.endsWith('.mp4'));
-                const oldFiles = videoFiles.filter(f => {
-                    try {
-                        const stats = fs.statSync(path.join(tempDir, f));
-                        return Date.now() - stats.mtimeMs > 2 * 60 * 60 * 1000; // Mais de 2 horas
-                    } catch (error) {
-                        return false;
-                    }
-                });
-                oldFiles.forEach(f => {
-                    try {
-                        fs.unlinkSync(path.join(tempDir, f));
-                    } catch (error) {
-                        logger.error(`Erro ao remover arquivo temporário ${f}: ${error.message}`);
-                    }
-                });
-                if (oldFiles.length) logger.info(`Limpou ${oldFiles.length} arquivos temporários antigos`);
-            });
-        }, 60 * 60 * 1000); // A cada hora
-    } catch (error) {
-        logger.error('Erro ao carregar configurações:', error);
     }
 }
 
@@ -2074,33 +1748,55 @@ async function sendMessage(msg, text) {
     }
 }
 
-// Configurar processador de vídeos integrado
+// Configurar processador de vídeos integrado com timeouts
 videoQueue.process('process-video', async (job) => {
     const { tempFilename, chatId, messageId, mimeType, userPrompt, senderNumber } = job.data;
+    
+    // Variável para armazenar o nome do arquivo no Google
+    let googleFileName = null;
     
     try {
       logger.info(`Processando vídeo: ${tempFilename} (Job ${job.id})`);
       
-      // Verificar se o arquivo ainda existe
+      // Verificar se o arquivo existe
       if (!fs.existsSync(tempFilename)) {
         throw new Error("Arquivo temporário do vídeo não encontrado");
       }
       
-      // Fazer upload para o Google AI
-      const uploadResponse = await fileManager.uploadFile(tempFilename, {
+      // Fazer upload para o Google AI com timeout
+      const uploadPromise = fileManager.uploadFile(tempFilename, {
         mimeType: mimeType,
         displayName: "Vídeo Enviado"
       });
-  
-      // Aguardar processamento
-      let file = await fileManager.getFile(uploadResponse.file.name);
-      let retries = 0;
       
-      // Aguardamos apenas se estiver PROCESSING
+      const uploadTimeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Timeout no upload do vídeo")), 60000) // 1 minuto
+      );
+      
+      const uploadResponse = await Promise.race([uploadPromise, uploadTimeoutPromise]);
+      
+      // Guardamos o nome do arquivo para poder excluí-lo depois
+      googleFileName = uploadResponse.file.name;
+  
+      // Aguardar processamento com timeout total
+      let file = await fileManager.getFile(googleFileName);
+      let retries = 0;
+      let totalProcessingTime = 0;
+      const MAX_PROCESSING_TIME = 180000; // 3 minutos
+      const RETRY_INTERVAL = 10000; // 10 segundos
+      
+      const startTime = Date.now();
+      
       while (file.state === "PROCESSING" && retries < 12) {
         logger.info(`Vídeo ainda em processamento, aguardando... (tentativa ${retries + 1})`);
-        await new Promise(resolve => setTimeout(resolve, 10000));
-        file = await fileManager.getFile(uploadResponse.file.name);
+        await new Promise(resolve => setTimeout(resolve, RETRY_INTERVAL));
+        
+        totalProcessingTime = Date.now() - startTime;
+        if (totalProcessingTime > MAX_PROCESSING_TIME) {
+          throw new Error("Timeout total excedido no processamento do vídeo");
+        }
+        
+        file = await fileManager.getFile(googleFileName);
         retries++;
       }
   
@@ -2108,7 +1804,6 @@ videoQueue.process('process-video', async (job) => {
         throw new Error("Falha no processamento do vídeo pelo Google AI");
       }
       
-      // Aqui aceitamos SUCCEEDED ou ACTIVE como estados válidos de conclusão
       if (file.state !== "SUCCEEDED" && file.state !== "ACTIVE") {
         throw new Error(`Estado inesperado do arquivo: ${file.state}`);
       }
@@ -2141,8 +1836,13 @@ videoQueue.process('process-video', async (job) => {
         }
       ];
   
-      // Gerar conteúdo
-      const result = await model.generateContent(contentParts);
+      // Adicionar timeout para a chamada à IA
+      const aiResponsePromise = model.generateContent(contentParts);
+      const aiTimeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Timeout na análise de vídeo pela IA")), 60000) // 1 minuto
+      );
+      
+      const result = await Promise.race([aiResponsePromise, aiTimeoutPromise]);
       let response = result.response.text();
       
       if (!response || typeof response !== 'string' || response.trim() === '') {
@@ -2152,13 +1852,40 @@ videoQueue.process('process-video', async (job) => {
       // Formatar resposta
       const finalResponse = `✅ *Análise do seu vídeo:*\n\n${response}\n\n_(Processado em ${Math.floor((Date.now() - job.processedOn) / 1000)}s)_`;
       
-      // Enviar resultado - usando o cliente principal já autenticado!
-      await client.sendMessage(senderNumber, finalResponse);
+// Enviar resultado com timeout e fallback
+if (isClientReady()) {
+    const sendPromise = client.sendMessage(senderNumber, finalResponse);
+    const sendTimeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Timeout ao enviar resposta")), 30000)
+    );
+    
+    try {
+        await Promise.race([sendPromise, sendTimeoutPromise]);
+        logger.info(`Resposta de vídeo enviada com sucesso para ${senderNumber}`);
+    } catch (sendError) {
+        logger.error(`Erro ao enviar resposta do vídeo: ${sendError.message}`);
+        
+        // Salvar a notificação para ser processada pelo heartbeat
+        await notificacoes.salvar(senderNumber, finalResponse);
+    }
+} else {
+    logger.warn(`Cliente WhatsApp não está pronto, salvando notificação para ${senderNumber}`);
+    await notificacoes.salvar(senderNumber, finalResponse);
+}
       
-      // Limpar arquivo temporário
-      if (fs.existsSync(tempFilename)) {
-        fs.unlinkSync(tempFilename);
-        logger.info(`Arquivo temporário ${tempFilename} removido após processamento bem-sucedido`);
+      // Limpeza de arquivos (executada de qualquer forma)
+      try {
+        if (fs.existsSync(tempFilename)) {
+          await fs.promises.unlink(tempFilename);
+          logger.info(`Arquivo temporário ${tempFilename} removido após processamento bem-sucedido`);
+        }
+        
+        if (googleFileName) {
+          await fileManager.deleteFile(googleFileName);
+          logger.info(`Arquivo removido do servidor Google: ${googleFileName}`);
+        }
+      } catch (cleanupError) {
+        logger.warn(`Erro na limpeza de arquivos: ${cleanupError.message}`);
       }
       
       logger.info(`Vídeo processado com sucesso: ${job.id}`);
@@ -2167,29 +1894,61 @@ videoQueue.process('process-video', async (job) => {
     } catch (error) {
       logger.error(`Erro ao processar vídeo na fila: ${error.message}`, { error, jobId: job.id });
       
-      // Notifica o usuário sobre o erro
-      try {
-        const errorMessage = getErrorMessageForUser(error);
-        await client.sendMessage(senderNumber, errorMessage);
-      } catch (err) {
-        logger.error(`Não consegui notificar sobre o erro: ${err.message}`);
-      }
+// Notificar o usuário sobre o erro
+try {
+    const errorMessage = getErrorMessageForUser(error);
+    
+    if (isClientReady()) {
+        const sendPromise = client.sendMessage(senderNumber, errorMessage);
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error("Timeout ao enviar mensagem de erro")), 10000)
+        );
+        
+        await Promise.race([sendPromise, timeoutPromise]);
+    } else {
+        throw new Error("Cliente WhatsApp não está pronto");
+    }
+} catch (notifyError) {
+    logger.error(`Não consegui notificar sobre o erro: ${notifyError.message}`);
+    // Tentar salvar notificação
+    try {
+        await notificacoes.salvar(senderNumber, getErrorMessageForUser(error));
+    } catch (notifErr) {
+        logger.error(`Falha ao salvar notificação: ${notifErr.message}`);
+    }
+}
       
-      // Limpar arquivo temporário em caso de erro
-      if (fs.existsSync(tempFilename)) {
-        fs.unlinkSync(tempFilename);
-        logger.info(`Arquivo temporário ${tempFilename} removido após erro`);
+      // Limpeza de recursos
+      try {
+        if (fs.existsSync(tempFilename)) {
+          fs.unlinkSync(tempFilename);
+          logger.info(`Arquivo temporário ${tempFilename} removido após erro`);
+        }
+        
+        if (googleFileName) {
+          await fileManager.deleteFile(googleFileName);
+          logger.info(`Arquivo do Google removido após erro: ${googleFileName}`);
+        }
+      } catch (cleanupError) {
+        logger.warn(`Erro ao limpar recursos: ${cleanupError.message}`);
       }
       
       throw error; // Repropaga o erro para a fila lidar com ele
     }
   });
   
-  // Log de inicialização
-  logger.info('Sistema de processamento de vídeos em fila inicializado');
+// Log de inicialização
+logger.info('Sistema de processamento de vídeos em fila inicializado');
 
 // Inicializa o cliente e configura tratamento de erros
 client.initialize();
+
+// Iniciar sistema de heartbeat para manter watchdog feliz
+const heartbeat = new HeartbeatSystem(logger, client);
+heartbeat.iniciar();
+
+// Log de inicialização
+logger.info('Sistema de processamento de vídeos em fila inicializado');
 
 // Tratamento de erros não capturados
 process.on('unhandledRejection', (reason, promise) => {

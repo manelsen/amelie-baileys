@@ -46,7 +46,8 @@ const videoQueue = new Queue('video-processing', {
       delay: 60000              // Começa com 1 minuto de espera
     },
     removeOnComplete: true,     // Remove o trabalho após completar
-    removeOnFail: false         // Mantém registros de falhas para análise
+    removeOnFail: false,        // Mantém registros de falhas para análise
+    timeout: 180000             // Timeout de 3 minutos
   }
 });
 
@@ -57,6 +58,68 @@ const problemVideosQueue = new Queue('problem-videos', {
     port: process.env.REDIS_PORT || 6379 
   }
 });
+
+/**
+ * Sistema de notificação entre processos
+ */
+const notificacoes = {
+  /**
+   * Salva uma notificação para ser entregue pelo processo principal
+   */
+  salvar: async (senderNumber, message) => {
+    try {
+      const dir = './temp';
+      if (!fs.existsSync(dir)) {
+        await fs.promises.mkdir(dir, { recursive: true });
+      }
+      
+      const notificationFile = path.join(dir, `notificacao_${senderNumber.replace(/[^0-9]/g, '')}_${Date.now()}.json`);
+      await fs.promises.writeFile(notificationFile, JSON.stringify({
+        senderNumber,
+        message,
+        timestamp: Date.now()
+      }));
+      
+      logger.info(`Notificação salva em arquivo: ${notificationFile}`);
+      return true;
+    } catch (error) {
+      logger.error(`Erro ao salvar notificação: ${error.message}`);
+      return false;
+    }
+  },
+  
+  /**
+   * Processa notificações pendentes
+   */
+  processar: async (client) => {
+    const tempDir = './temp';
+    if (!fs.existsSync(tempDir)) return;
+    
+    try {
+      const arquivos = await fs.promises.readdir(tempDir);
+      const notificacoes = arquivos.filter(f => f.startsWith('notificacao_'));
+      
+      for (const arquivo of notificacoes) {
+        try {
+          const caminhoCompleto = path.join(tempDir, arquivo);
+          const conteudo = await fs.promises.readFile(caminhoCompleto, 'utf8');
+          const dados = JSON.parse(conteudo);
+          
+          // Tentar enviar a mensagem novamente
+          await client.sendMessage(dados.senderNumber, dados.message);
+          logger.info(`Notificação pendente enviada para ${dados.senderNumber}`);
+          
+          // Remover arquivo após processamento bem-sucedido
+          await fs.promises.unlink(caminhoCompleto);
+        } catch (err) {
+          logger.error(`Erro ao processar arquivo de notificação ${arquivo}: ${err.message}`);
+        }
+      }
+    } catch (err) {
+      logger.error(`Erro ao verificar diretório de notificações: ${err.message}`);
+    }
+  }
+};
 
 /**
  * Obtém mensagem de erro amigável para o usuário
@@ -109,5 +172,6 @@ module.exports = {
   videoQueue,
   problemVideosQueue,
   logger,
-  getErrorMessageForUser
+  getErrorMessageForUser,
+  notificacoes
 };
