@@ -1130,13 +1130,14 @@ async function handleImageMessage(msg, imageData, chatId) {
         const sender = msg.author || msg.from;
         let userPrompt = `Analise esta imagem de forma extremamente detalhada para pessoas com deficiência visual.
 Inclua:
-1. Número exato de pessoas, suas posições e roupas (cores, tipos)
-2. Ambiente e cenário completo, em todos os planos
-3. Todos os objetos visíveis 
-4. Movimentos e ações detalhadas
-5. Expressões faciais
-6. Textos visíveis
-7. Qualquer outro detalhe relevante
+1. Se for uma receita, recibo ou documento, transcreva o texto integralmente, verbatim, incluindo, mas não limitado, a CNPJ, produtos, preços, nomes de remédios, posologia, nome do profissional e CRM, etc.
+2. Número exato de pessoas, suas posições e roupas (cores, tipos)
+3. Ambiente e cenário completo, em todos os planos
+4. Todos os objetos visíveis 
+5. Movimentos e ações detalhadas
+6. Expressões faciais
+7. Textos visíveis
+8. Qualquer outro detalhe relevante
 
 Crie uma descrição organizada e acessível.`;
 
