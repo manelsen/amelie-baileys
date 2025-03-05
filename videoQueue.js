@@ -92,6 +92,10 @@ const notificacoes = {
    * Processa notificações pendentes
    */
   processar: async (client) => {
+    if (!client) {
+      throw new Error("Cliente não fornecido para processamento de notificações");
+    }
+    
     const tempDir = './temp';
     if (!fs.existsSync(tempDir)) return;
     
@@ -102,15 +106,24 @@ const notificacoes = {
       for (const arquivo of notificacoes) {
         try {
           const caminhoCompleto = path.join(tempDir, arquivo);
+          const stats = await fs.promises.stat(caminhoCompleto);
+          
+          // Ignorar arquivos muito recentes (podem estar sendo escritos)
+          if (Date.now() - stats.mtime.getTime() < 5000) {
+            continue;
+          }
+          
           const conteudo = await fs.promises.readFile(caminhoCompleto, 'utf8');
           const dados = JSON.parse(conteudo);
           
           // Tentar enviar a mensagem novamente
-          await client.sendMessage(dados.senderNumber, dados.message);
-          logger.info(`Notificação pendente enviada para ${dados.senderNumber}`);
-          
-          // Remover arquivo após processamento bem-sucedido
-          await fs.promises.unlink(caminhoCompleto);
+          if (dados.senderNumber && dados.message) {
+            await client.sendMessage(dados.senderNumber, dados.message);
+            logger.info(`✅ Notificação pendente enviada para ${dados.senderNumber}`);
+            
+            // Remover arquivo após processamento bem-sucedido
+            await fs.promises.unlink(caminhoCompleto);
+          }
         } catch (err) {
           logger.error(`Erro ao processar arquivo de notificação ${arquivo}: ${err.message}`);
         }

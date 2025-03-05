@@ -15,6 +15,7 @@
     "chokidar": "^4.0.0",
     "colors": "^1.4.0",
     "crypto": "^1.0.1",
+    "date-fns-tz": "^3.2.0",
     "dotenv": "^16.4.7",
     "file-type": "^16.5.4",
     "gulp": "^5.0.0",

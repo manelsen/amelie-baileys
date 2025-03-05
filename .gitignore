@@ -12,3 +12,4 @@ logs/*
 backup*
 auth_info_multi/
 package-lock.json
+blocked_videos

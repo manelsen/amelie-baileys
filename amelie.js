@@ -37,6 +37,14 @@ const MAX_RECONNECT_ATTEMPTS  = 5;
 
 let debug_level               = 'info'
 
+let clienteWhatsAppPronto = false;
+
+let inicializacaoEmAndamento = false;
+let verificarInicioInterval = null;
+
+let falhasConsecutivas = 0;
+const MAX_FALHAS_ANTES_RESTART = 5;
+
 // Sistema de Circuit Breaker para proteger contra falhas na API
 const circuitBreaker = {
     failures: 0,
@@ -151,10 +159,18 @@ const modelCache = new Map();
  * @returns {boolean} Verdadeiro se o cliente estiver pronto
  */
 function isClientReady() {
-    return client && client.info && client.info.wid && 
-           client.info.connected === true && 
-           client.pupPage && client.pupBrowser;
-}
+    try {
+      return clienteWhatsAppPronto && 
+             client && 
+             client.info && 
+             client.info.wid && 
+             client.pupPage && 
+             client.pupBrowser &&
+             client.info.connected === true;
+    } catch (error) {
+      return false;
+    }
+  }
 
 /**
  * Gera uma chave única baseada nas configurações do modelo
@@ -199,6 +215,7 @@ function getModelCacheKey(config) {
         Sua criadora e idealizadora foi a Belle Utsch.         
         Você é baseada no Google Gemini Flash 2.0.         
         Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo.         
+        Se alguém pedir maiores detalhes sobre a audiodescrição de uma imagem ou vídeo ou transcrição de um áudio, você deve orientar a pessoa que envie novamente a mídia e, anexo a ela, um comentário pontuando onde deseja que a descrição seja focada.
         Você lida com as pessoas com tato e bom humor.         
         Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie.         
         Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch. 
@@ -406,7 +423,7 @@ client.on('disconnected', (reason) => {
         logger.info(`Tentativa de reconexão ${reconnectCount}/${MAX_RECONNECT_ATTEMPTS}...`);
         
         setTimeout(() => {
-            client.initialize();
+            inicializarClienteRobusto();
         }, 5000); // Espera 5 segundos antes de tentar reconectar
     } else {
         logger.error(`Número máximo de tentativas de reconexão (${MAX_RECONNECT_ATTEMPTS}) atingido. Encerrando aplicação.`);
@@ -492,7 +509,7 @@ client.on('message_create', async (msg) => {
                 await handleVideoMessage(msg, attachmentData, chatId);
                 return;
             } else {
-                logger.info('Tipo de mídia não suportado.');
+                logger.debug('Tipo de mídia não suportado.');
                 return;
             }
         }
@@ -1276,21 +1293,17 @@ async function handleVideoMessage(msg, videoData, chatId) {
         const jobId = `video_${chatId}_${Date.now()}`;
         
         try {
-            // MUDANÇA IMPORTANTE: Primeiro salvar o arquivo, depois adicionar à fila!
             logger.info(`Salvando arquivo de vídeo ${tempFilename}...`);
             const videoBuffer = Buffer.from(videoData.data, 'base64');
             
-            // Salvar o arquivo COMPLETAMENTE antes de prosseguir
             await fs.promises.writeFile(tempFilename, videoBuffer);
             logger.info(`✅ Arquivo de vídeo salvo com sucesso: ${tempFilename} (${Math.round(videoBuffer.length / 1024)} KB)`);
             
-            // Verificar se o arquivo realmente existe e tem tamanho correto
             const stats = await fs.promises.stat(tempFilename);
             if (stats.size !== videoBuffer.length) {
                 throw new Error(`Tamanho do arquivo salvo (${stats.size}) não corresponde ao buffer original (${videoBuffer.length})`);
             }
             
-            // DEPOIS que garantimos que o arquivo existe, adicionar à fila
             await videoQueue.add('process-video', {
                 tempFilename,
                 chatId,
@@ -1697,6 +1710,72 @@ async function getConfig(chatId) {
     });
 }
 
+async function enviarMensagemSegura(destino, texto) {
+    if (!isClientReady()) {
+        logger.warn(`Cliente não está pronto para enviar mensagem para ${destino}`);
+        return false;
+    }
+    
+    let tentativas = 0;
+    const maxTentativas = 3;
+    
+    while (tentativas < maxTentativas) {
+        try {
+            // Verificar estado da página
+            let pageState = false;
+            try {
+                pageState = await client.pupPage.evaluate(() => {
+                    return window.Store && 
+                          window.Store.Msg && 
+                          window.Store.Conn && 
+                          window.Store.Conn.connected;
+                });
+            } catch (evalError) {
+                logger.warn(`Erro ao verificar estado da página: ${evalError.message}`);
+                pageState = false;
+            }
+            
+            if (!pageState) {
+                tentativas++;
+                logger.warn(`Estado do WhatsApp não está pronto (tentativa ${tentativas})`);
+                
+                // Na última tentativa, tentar método alternativo
+                if (tentativas >= maxTentativas) {
+                    logger.warn("Tentando método alternativo de envio...");
+                    
+                    await client.pupPage.evaluate((dest, msg) => {
+                        window.WWebJS.sendMessage(dest, msg);
+                    }, destino, texto);
+                    
+                    logger.info(`Mensagem enviada via método alternativo para ${destino}`);
+                    return true;
+                }
+                
+                // Esperar um pouco antes da próxima tentativa
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                continue;
+            }
+            
+            await client.sendMessage(destino, texto);
+            logger.info(`✅ Mensagem enviada com sucesso para ${destino}`);
+            return true;
+        } catch (error) {
+            tentativas++;
+            logger.error(`Erro ao enviar mensagem (tentativa ${tentativas}): ${error.message}`);
+            
+            if (tentativas >= maxTentativas) {
+                logger.error(`Falha após ${maxTentativas} tentativas`);
+                return false;
+            }
+            
+            // Esperar antes da próxima tentativa
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+    }
+    
+    return false;
+}
+
 /**
  * Envia uma mensagem de resposta
  * @param {Object} msg - Mensagem original
@@ -1736,15 +1815,23 @@ async function sendMessage(msg, text) {
         // Log no formato solicitado
         logger.info(`${logPrefix}: ${originalMessage}\nResposta: ${trimmedText}`);
         
-        await msg.reply(trimmedText);
+        // MUDANÇA IMPORTANTE: Usar a função super-poderosa em vez de msg.reply()
+        const chatId = chat.id._serialized;
+        await superSendMessage(chatId, trimmedText);
     } catch (error) {
         logger.error('Erro ao enviar mensagem:', { 
             error: error.message,
             stack: error.stack,
             text: text
         });
-        await msg.reply(
-            'Desculpe, ocorreu um erro ao enviar a resposta. Por favor, tente novamente.');
+        
+        try {
+            // Salvar mensagem como notificação para tentar enviar mais tarde
+            const chatId = msg.chat.id._serialized;
+            await notificacoes.salvar(chatId, 'Desculpe, ocorreu um erro ao enviar a resposta. Por favor, tente novamente.');
+        } catch (fallbackError) {
+            logger.error(`Também falhou o método alternativo: ${fallbackError.message}`);
+        }
     }
 }
 
@@ -1788,7 +1875,7 @@ videoQueue.process('process-video', async (job) => {
       const startTime = Date.now();
       
       while (file.state === "PROCESSING" && retries < 12) {
-        logger.info(`Vídeo ainda em processamento, aguardando... (tentativa ${retries + 1})`);
+        logger.info(`Vídeo em processamento... (tentativa ${retries + 1})`);
         await new Promise(resolve => setTimeout(resolve, RETRY_INTERVAL));
         
         totalProcessingTime = Date.now() - startTime;
@@ -1849,10 +1936,8 @@ videoQueue.process('process-video', async (job) => {
         response = "Não consegui gerar uma descrição clara para este vídeo.";
       }
       
-      // Formatar resposta
       const finalResponse = `✅ *Análise do seu vídeo:*\n\n${response}\n\n_(Processado em ${Math.floor((Date.now() - job.processedOn) / 1000)}s)_`;
       
-// Enviar resultado com timeout e fallback
 if (isClientReady()) {
     const sendPromise = client.sendMessage(senderNumber, finalResponse);
     const sendTimeoutPromise = new Promise((_, reject) => 
@@ -1877,7 +1962,7 @@ if (isClientReady()) {
       try {
         if (fs.existsSync(tempFilename)) {
           await fs.promises.unlink(tempFilename);
-          logger.info(`Arquivo temporário ${tempFilename} removido após processamento bem-sucedido`);
+          logger.debug(`Arquivo temporário ${tempFilename} removido após processamento bem-sucedido`);
         }
         
         if (googleFileName) {
@@ -1936,16 +2021,543 @@ try {
       throw error; // Repropaga o erro para a fila lidar com ele
     }
   });
+
+/**
+ * Verifica e envia notificações pendentes quando o cliente estiver pronto
+ * @async
+ */
+async function enviarNotificacoesQuandoPossivel() {
+    if (!isClientReady()) {
+        logger.debug("📱 Cliente WhatsApp ainda não está pronto para enviar notificações");
+        return;
+    }
+    
+    try {
+        await notificacoes.processar(client);
+    } catch (error) {
+        logger.error(`Erro ao processar notificações: ${error.message}`);
+    }
+}
+
+setInterval(enviarNotificacoesQuandoPossivel, 60000);
+
+setInterval(async () => {
+    if (!await isClientReallyReady()) {
+      logger.warn("⚠️ Detecção periódica: cliente não está realmente pronto!");
+      await reconectar();
+    } else {
+      // Está realmente pronto, então vamos processar notificações pendentes
+      logger.debug("✅ Cliente está realmente pronto, processando notificações...");
+      try {
+        // Processar notificações pendentes
+        const tempDir = './temp';
+        if (!fs.existsSync(tempDir)) return;
+        
+        const files = await fs.promises.readdir(tempDir);
+        const notifications = files.filter(f => f.startsWith('notificacao_'));
+        
+        if (notifications.length > 0) {
+          logger.info(`📬 Encontradas ${notifications.length} notificações pendentes para envio`);
+        }
+        
+        // Processar as 5 primeiras notificações pendentes (para não sobrecarregar)
+        for (const file of notifications.slice(0, 5)) {
+          try {
+            const filePath = path.join(tempDir, file);
+            const content = await fs.promises.readFile(filePath, 'utf8');
+            const data = JSON.parse(content);
+            
+            if (data.senderNumber && data.message) {
+              await superSendMessage(data.senderNumber, data.message);
+              await fs.promises.unlink(filePath);
+              logger.info(`✅ Notificação pendente enviada para ${data.senderNumber}`);
+            }
+          } catch (err) {
+            logger.error(`Erro ao processar notificação ${file}: ${err.message}`);
+          }
+        }
+      } catch (error) {
+        logger.error(`Erro ao processar notificações pendentes: ${error.message}`);
+      }
+    }
+  }, 60000); // A cada minuto
+
+/**
+ * Limpa trabalhos antigos que possam causar erros
+ * @async
+ */
+async function limparFilaDeTrabalhos() {
+    try {
+      logger.info("🧹 Iniciando limpeza da fila de trabalhos antigos...");
+      
+      // Obter todos os trabalhos pendentes
+      const jobs = await videoQueue.getJobs(['waiting', 'active', 'delayed']);
+      let contadorRemovidos = 0;
+      
+      if (!jobs || jobs.length === 0) {
+        logger.info("✅ Nenhum trabalho pendente encontrado.");
+        return;
+      }
+      
+      for (const job of jobs) {
+        if (!job.data || !job.data.tempFilename) continue;
+        
+        const { tempFilename } = job.data;
+        
+        // Se o arquivo não existe mais, remover o trabalho
+        if (!fs.existsSync(tempFilename)) {
+          logger.warn(`⚠️ Removendo trabalho fantasma: ${job.id} (arquivo ${tempFilename} não existe)`);
+          await job.remove();
+          contadorRemovidos++;
+        }
+      }
+      
+      logger.info(`✅ Limpeza concluída! ${contadorRemovidos} trabalhos fantasmas removidos.`);
+    } catch (error) {
+      logger.error(`❌ Erro ao limpar fila: ${error.message}`);
+    }
+  }
   
+// Executar limpeza na inicialização
+limparFilaDeTrabalhos();
+
+// E também a cada 5 minutos
+setInterval(limparFilaDeTrabalhos, 5 * 60 * 1000);
+
+
+/**
+ * Inicializa o cliente com verificação de estado robusta
+ */
+async function inicializarClienteRobusto() {
+    // Evitar inicializações sobrepostas
+    if (inicializacaoEmAndamento) {
+      logger.info('Uma inicialização já está em andamento, aguardando...');
+      return;
+    }
+    
+    inicializacaoEmAndamento = true;
+    
+    try {
+      logger.info('Iniciando cliente WhatsApp com inicialização robusta...');
+      clienteWhatsAppPronto = false;
+      
+      // Limpar intervalos existentes
+      if (verificarInicioInterval) {
+        clearInterval(verificarInicioInterval);
+        verificarInicioInterval = null;
+      }
+      
+      // Inicializar apenas UMA vez
+      client.initialize();
+      
+      // Configurar verificação periódica única
+      verificarInicioInterval = setInterval(async () => {
+        try {
+          if (client.pupPage) {
+            const conectado = await client.pupPage.evaluate(() => {
+              return window.Store && window.Store.Conn && window.Store.Conn.connected;
+            }).catch(() => false);
+            
+            if (conectado) {
+              logger.info('🎉 Cliente WhatsApp verificado e realmente conectado!');
+              clienteWhatsAppPronto = true;
+              clearInterval(verificarInicioInterval);
+              verificarInicioInterval = null;
+              inicializacaoEmAndamento = false;
+            }
+          }
+        } catch (error) {
+          logger.warn(`Ainda tentando conectar: ${error.message}`);
+        }
+      }, 10000); // Verificar a cada 10 segundos
+      
+    } catch (error) {
+      logger.error(`Erro na inicialização robusta: ${error.message}`);
+      clienteWhatsAppPronto = false;
+      inicializacaoEmAndamento = false;
+    }
+  }
+
+async function verificarNotificacoesPendentes() {
+    // Não fazer nada se o cliente não estiver prontinho da silva
+    if (!clienteWhatsAppPronto || !client || !client.pupPage) {
+      logger.debug('Cliente não está pronto para processar notificações');
+      return;
+    }
+    
+    // Tentar novamente verificar se realmente está conectado
+    try {
+      const realmenteConectado = await client.pupPage.evaluate(() => {
+        return window.Store && window.Store.Conn && window.Store.Conn.connected;
+      }).catch(() => false);
+      
+      if (!realmenteConectado) {
+        logger.warn('Cliente parece estar em estado zumbi. Agendando reinicialização...');
+        inicializarClienteRobusto();
+        return;
+      }
+      
+      // Agora sim, processar as notificações...
+    } catch (error) {
+      logger.error(`Erro ao verificar conexão: ${error.message}`);
+    }
+  }  
+  
+
 // Log de inicialização
 logger.info('Sistema de processamento de vídeos em fila inicializado');
 
 // Inicializa o cliente e configura tratamento de erros
-client.initialize();
+inicializarClienteRobusto();
+
+// Verificar e enviar notificações pendentes a cada minuto
+setInterval(async () => {
+    if (isClientReady()) {
+      logger.info("Verificando notificações pendentes...");
+      await verificarNotificacoesPendentes();
+    }
+  }, 60000);
 
 // Iniciar sistema de heartbeat para manter watchdog feliz
 const heartbeat = new HeartbeatSystem(logger, client);
 heartbeat.iniciar();
+
+/**
+ * Verifica se o WhatsApp está realmente processando mensagens
+ * e tenta reanimá-lo se estiver em estado zumbi
+ */
+async function verificarEstadoWhatsApp() {
+    try {
+      if (!client || !client.pupPage) {
+        logger.warn("Cliente não inicializado, tentando reiniciar...");
+        reiniciarCliente();
+        return;
+      }
+      
+      // Verificar se o Cliente está realmente pronto
+      if (!clienteWhatsAppPronto) {
+        logger.warn("Cliente marcado como não pronto, tentando despertar...");
+        despertar();
+        return;
+      }
+      
+      // Verificar se os event listeners estão funcionando
+      const eventListenersAtivos = await client.pupPage.evaluate(() => {
+        return window.Store && 
+               window.Store.Msg && 
+               window.Store.Conn && 
+               window.Store.Conn.connected;
+      }).catch(() => false);
+      
+      if (!eventListenersAtivos) {
+        logger.warn("Conexão WebSocket do WhatsApp em estado zumbi, reconectando...");
+        reconectar();
+      } else {
+        logger.debug("WhatsApp parece estar funcionando corretamente");
+      }
+    } catch (error) {
+      logger.error(`Erro ao verificar estado do WhatsApp: ${error.message}`);
+    }
+  }
+  
+  /**
+   * Tenta "acordar" a conexão do WhatsApp
+   */
+  async function despertar() {
+    try {
+      logger.info("🔄 Tentando despertar WhatsApp...");
+      
+      // Forçar um pequeno evento para acordar o WebSocket
+      await client.pupPage.evaluate(() => {
+        if (window.Store && window.Store.Wap) {
+          window.Store.Wap.statusFind("test");
+          return true;
+        }
+        return false;
+      }).catch(() => false);
+      
+      // Registrar eventos novamente
+      registrarEventos();
+      
+      logger.info("✅ Tentativa de despertar concluída");
+    } catch (error) {
+      logger.error(`Erro ao despertar cliente: ${error.message}`);
+    }
+  }
+  
+  /**
+   * Reinstala os eventos principais
+   */
+/**
+ * Reinstala os eventos principais
+ */
+function registrarEventos() {
+    // Remover e reinstalar o evento de mensagem
+    client.removeAllListeners('message_create');
+    
+    // Reinstalar o event handler original
+    client.on('message_create', async (msg) => {
+      // Log para debug
+      logger.debug(`📨 Demanda recebidaa: ${msg.from} - ${msg.body || "[Mídia]"}`);
+      
+      try {
+        if (msg.fromMe) return;
+  
+        const chat = await msg.getChat();
+        await chat.sendSeen();
+  
+        const isGroup = chat.id._serialized.endsWith('@g.us');
+  
+        let groupInfo = '';
+        if (isGroup) {
+            const group = await getOrCreateGroup(chat);
+            groupInfo = ` no grupo "${group.title}" (${chat.id._serialized})`;
+            logger.debug(`Processando mensagem no grupo: ${group.title}`);
+        }
+  
+        const usuario = await getOrCreateUser(msg.author || msg.from);
+        logger.debug(`Mensagem recebida: (${usuario.name}, ${groupInfo}) -> ${msg.body}`);
+  
+        const chatId = chat.id._serialized;
+        const isCommand = msg.body && msg.body.startsWith('!');
+  
+        if (isCommand) {
+            logger.debug("Processando comando...");
+            await handleCommand(msg, chatId);
+            return;
+        }
+  
+        if (msg.hasMedia) {
+            logger.debug("Processando mídia...");
+            const attachmentData = await msg.downloadMedia();
+            if (!attachmentData || !attachmentData.data) {
+                logger.error('Não foi possível obter dados de mídia.');
+                return;
+            }
+  
+            // Função para inferir mime type do vídeo, caso não seja fornecido
+            function inferVideoMimeType(buffer) {
+                if (!buffer || buffer.length < 12) {
+                    return 'application/octet-stream';
+                }
+                const hexBytes = buffer.slice(0, 12).toString('hex').toLowerCase();
+                if (hexBytes.includes('66747970')) {
+                    return 'video/mp4';
+                }
+                if (hexBytes.startsWith('1a45dfa3')) {
+                    return 'video/webm';
+                }
+                if (hexBytes.startsWith('52494646')) {
+                    return 'video/avi';
+                }
+                if (hexBytes.startsWith('3026b275')) {
+                    return 'video/x-ms-wmv';
+                }
+                return 'application/octet-stream';
+            }
+  
+            if (!attachmentData.mimetype) {
+                const buffer = Buffer.from(attachmentData.data, 'base64');
+                const mime = inferVideoMimeType(buffer);
+                logger.info(`MIME inferido: ${mime}`);
+                attachmentData.mimetype = mime;
+            }
+  
+            if (attachmentData.mimetype.startsWith('audio/')) {
+                await handleAudioMessage(msg, attachmentData, chatId);
+                return;
+            } else if (attachmentData.mimetype.startsWith('image/')) {
+                await handleImageMessage(msg, attachmentData, chatId);
+                return;
+            } else if (attachmentData.mimetype.startsWith('video/')) {
+                await handleVideoMessage(msg, attachmentData, chatId);
+                return;
+            } else {
+                logger.info('Tipo de mídia não suportado.');
+                return;
+            }
+        }
+  
+        if (isGroup) {
+            logger.debug("Verificando regras do grupo...");
+            const shouldRespond = await shouldRespondInGroup(msg, chat);
+            if (!shouldRespond) {
+                logger.debug("Mensagem não atende critérios de resposta do grupo");
+                return;
+            }
+            logger.debug("Respondendo à mensagem do grupo...");
+        } else {
+            logger.debug("Respondendo à mensagem privada...");
+        }
+  
+        await handleTextMessage(msg);
+      } catch (error) {
+        logger.error(`Erro ao processar mensagem: ${error.message}`, { error });
+        try {
+          await msg.reply('Desculpe, ocorreu um erro inesperado. Por favor, tente novamente mais tarde.');
+        } catch (replyErr) {
+          logger.error(`Não consegui enviar mensagem de erro: ${replyErr.message}`);
+        }
+      }
+    });
+    
+    logger.info("🔄 Eventos reinstalados");
+  }
+    
+/**
+ * Verifica se o cliente do WhatsApp está REALMENTE pronto para enviar mensagens
+ * @returns {Promise<boolean>} Verdadeiro se o cliente estiver pronto
+ */
+async function isClientReallyReady() {
+    try {
+      if (!clienteWhatsAppPronto || !client || !client.info || !client.info.wid) {
+        return false;
+      }
+      
+      // Verificação mais profunda - ver se o WebSocket está respondendo
+      if (!client.pupPage) {
+        return false;
+      }
+      
+      // Verificar estado interno do WhatsApp Web
+      const storeOk = await client.pupPage.evaluate(() => {
+        return window.Store && 
+               window.Store.Msg && 
+               window.Store.Conn && 
+               window.Store.Conn.connected;
+      }).catch(() => false);
+      
+      return storeOk === true;
+    } catch (error) {
+      logger.error(`Erro ao verificar estado real do cliente: ${error.message}`);
+      return false;
+    }
+  }
+  
+/**
+ * Envia mensagem com múltiplas tentativas e reinício total se falhar
+ * @param {string} destination - ID do destinatário 
+ * @param {string} message - Texto da mensagem
+ */
+async function superSendMessage(destination, message) {
+    // Variável estática
+    if (typeof superSendMessage.tentativasFalhas === 'undefined') {
+      superSendMessage.tentativasFalhas = 0;
+    }
+    
+    try {
+      // Verificar estado do cliente
+      if (!client || !client.info || !client.info.wid) {
+        logger.warn("Cliente não está inicializado para enviar mensagens");
+        superSendMessage.tentativasFalhas++;
+        await notificacoes.salvar(destination, message);
+        return false;
+      }
+      
+      // Tentar enviar a mensagem
+      try {
+        await client.sendMessage(destination, message);
+        
+        // Se teve sucesso, resetar contador
+        superSendMessage.tentativasFalhas = 0;
+        return true;
+      } catch (sendError) {
+        logger.error(`Erro ao enviar mensagem: ${sendError.message}`);
+        
+        // Aumentar contador de falhas
+        superSendMessage.tentativasFalhas++;
+        
+        // Salvar notificação
+        await notificacoes.salvar(destination, message);
+        
+        // Se falhou muitas vezes...
+        if (superSendMessage.tentativasFalhas >= 5) {
+          logger.error(`⚠️ EMERGÊNCIA: ${superSendMessage.tentativasFalhas} falhas consecutivas no envio de mensagens!`);
+          logger.error("🔴 INICIANDO REINÍCIO FORÇADO DO PROCESSO!");
+          
+          // Esperar um pouquinho para terminar de salvar logs
+          setTimeout(() => {
+            process.exit(1); // Saída com erro para o PM2 reiniciar
+          }, 1000);
+        }
+        
+        return false;
+      }
+    } catch (error) {
+      logger.error(`Erro geral em superSendMessage: ${error.message}`);
+      superSendMessage.tentativasFalhas++;
+      await notificacoes.salvar(destination, message);
+      return false;
+    }
+  }
+
+/**
+ * Força uma reconexão completa
+ */
+async function reconectar() {
+    // Contador para evitar reinícios excessivos
+    let falhasConsecutivas = 0;
+    
+    try {
+      logger.info("🔄 Tentando reconexão simples do WhatsApp...");
+      
+      // Se já tivemos muitas falhas, vamos para o reinício completo
+      if (falhasConsecutivas >= 3) {
+        logger.warn(`⚠️ Muitas falhas consecutivas (${falhasConsecutivas}), iniciando reinício completo!`);
+        await reinicioCompleto();
+        falhasConsecutivas = 0;
+        return;
+      }
+      
+      // Tentativa normal de reconexão
+      await client.pupPage.evaluate(() => {
+        if (window.Store && window.Store.Conn) {
+          window.Store.Conn.reconnect();
+          return true;
+        }
+        return false;
+      }).catch(() => false);
+      
+      // Dar um tempinho e verificar se realmente resolveu
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
+      // Verificar se reconectou de verdade
+      const reconectadoRealmente = await isClientReallyReady();
+      
+      if (reconectadoRealmente) {
+        logger.info("✅ Reconexão bem-sucedida!");
+        falhasConsecutivas = 0;
+      } else {
+        logger.warn("⚠️ Reconexão não surtiu efeito, aumentando contador de falhas");
+        falhasConsecutivas++;
+        
+        // Se já falhamos demais, fazer reinício completo
+        if (falhasConsecutivas >= 3) {
+          logger.warn(`⚠️ Muitas falhas consecutivas (${falhasConsecutivas}), iniciando reinício completo!`);
+          await reinicioCompleto();
+          falhasConsecutivas = 0;
+        }
+      }
+    } catch (error) {
+      logger.error(`Erro na reconexão: ${error.message}`);
+      falhasConsecutivas++;
+    }
+  }
+  
+  /**
+   * Reinicialização completa em último caso
+   */
+  function reiniciarCliente() {
+    try {
+      logger.info("🔄 Reiniciando cliente completamente...");
+      inicializarClienteRobusto();
+    } catch (error) {
+      logger.error(`Erro na reinicialização: ${error.message}`);
+    }
+  }
+  
+  // Adicionar verificação periódica a cada minuto
+  setInterval(verificarEstadoWhatsApp, 60000);
 
 // Log de inicialização
 logger.info('Sistema de processamento de vídeos em fila inicializado');
@@ -1959,6 +2571,165 @@ process.on('uncaughtException', (error) => {
     logger.error(`Uncaught Exception: ${error.message}`, { error });
     process.exit(1);
 });
+
+/**
+ * Evento de cliente pronto
+ */
+client.on('ready', () => {
+    clienteWhatsAppPronto = true;
+    logger.info('📱 Cliente WhatsApp pronto para uso!');
+    reconnectCount = 0; // Reset da contagem de reconexões
+    
+    // Processar notificações pendentes assim que estiver pronto
+    try {
+        notificacoes.processar(client).catch(err => {
+            logger.error(`Erro ao processar notificações pendentes: ${err.message}`);
+        });
+    } catch (error) {
+        logger.error(`Erro ao iniciar processamento de notificações: ${error.message}`);
+    }
+});
+
+/**
+ * Realiza um reinício completo e profundo da sessão do WhatsApp
+ */
+async function reinicioCompleto() {
+    try {
+      logger.info("🔄 Iniciando REINÍCIO COMPLETO do WhatsApp...");
+      
+      // Marcar como não pronto para evitar operações durante o reinício
+      clienteWhatsAppPronto = false;
+      
+      // 1. Desconectar completamente
+      if (client.pupBrowser) {
+        try {
+          // Destruir a página atual antes para evitar falhas
+          if (client.pupPage) {
+            await client.pupPage.close().catch(e => {});
+          }
+          await client.pupBrowser.close().catch(e => {});
+        } catch (err) {
+          logger.warn(`Erro ao fechar browser: ${err.message}`);
+        }
+      }
+      
+      // 2. Pequena pausa para garantir que tudo foi liberado
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // 3. Destruir completamente o cliente
+      try {
+        await client.destroy().catch(e => {});
+      } catch (err) {
+        logger.warn(`Erro na destruição do cliente: ${err.message}`);
+      }
+      
+      // 4. Pequena pausa para garantir que tudo foi liberado
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      // 5. Limpar completamente todos os listeners
+      client.removeAllListeners();
+      
+      // 6. Inicializar um cliente totalmente novo
+      logger.info("🆕 Criando uma sessão totalmente nova...");
+      
+      // 7. Instalar os listeners principais novamente
+      client.on('qr', qr => {
+        qrcode.generate(qr, {small: true});
+        logger.info('QR code gerado');
+      });
+      
+      client.on('ready', () => {
+        logger.info('📱 Cliente WhatsApp pronto para uso!');
+        clienteWhatsAppPronto = true;
+        reconnectCount = 0;
+      });
+      
+      client.on('disconnected', (reason) => {
+        logger.error(`Cliente desconectado: ${reason}`);
+        clienteWhatsAppPronto = false;
+      });
+      
+      // 8. Registrar o handler de mensagens
+      registrarEventos();
+      
+      // 9. Inicializar o cliente
+      await client.initialize();
+      
+      logger.info("✅ Processo de reinício completo iniciado. Aguardando conexão...");
+      
+      // 10. Programar verificação de sucesso
+      setTimeout(async () => {
+        if (!clienteWhatsAppPronto) {
+          logger.warn("⚠️ Reinício não completou em tempo razoável. Status atual:");
+          
+          if (client.info && client.info.wid) {
+            logger.info("📱 WhatsApp ID disponível: " + client.info.wid);
+          } else {
+            logger.warn("❌ WhatsApp ID não disponível");
+          }
+        }
+      }, 30000);
+      
+      return true;
+    } catch (error) {
+      logger.error(`Erro catastrófico no reinício: ${error.message}`);
+      return false;
+    }
+  }
+
+/**
+ * Força uma reconexão completa com opção de reinício do processo
+ */
+async function reconectar() {
+    try {
+      logger.info(`🔄 Tentando reconexão do WhatsApp... (falhas anteriores: ${falhasConsecutivas})`);
+      
+      // Tentativa normal de reconexão
+      await client.pupPage.evaluate(() => {
+        if (window.Store && window.Store.Conn) {
+          window.Store.Conn.reconnect();
+          return true;
+        }
+        return false;
+      }).catch(() => false);
+      
+      // Dar um tempinho e verificar se realmente resolveu
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
+      // Verificar se reconectou de verdade
+      const reconectadoRealmente = await isClientReallyReady();
+      
+      if (reconectadoRealmente) {
+        logger.info("✅ Reconexão bem-sucedida!");
+        falhasConsecutivas = 0;
+      } else {
+        falhasConsecutivas++;
+        logger.warn(`⚠️ Reconexão não surtiu efeito (falha ${falhasConsecutivas}/${MAX_FALHAS_ANTES_RESTART})`);
+        
+        // Se já falhamos demais, reiniciar o PROCESSO INTEIRO
+        if (falhasConsecutivas >= MAX_FALHAS_ANTES_RESTART) {
+          logger.error(`⚠️ ATENÇÃO: Muitas falhas consecutivas (${falhasConsecutivas}), REINICIANDO PROCESSO!`);
+          
+          // Registrar estado atual
+          logger.info("📊 Estado antes do reinício:");
+          logger.info(`- Cliente pronto: ${clienteWhatsAppPronto}`);
+          logger.info(`- Conexão: ${client.info?.connected ? 'Conectado' : 'Desconectado'}`);
+          
+          // Aguardar algumas mensagens serem salvas
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          
+          // SOLUÇÃO NUCLEAR: Encerrar o processo - o PM2 vai reiniciá-lo automaticamente
+          process.exit(1);
+        }
+      }
+    } catch (error) {
+      logger.error(`Erro na reconexão: ${error.message}`);
+      falhasConsecutivas++;
+    }
+  }
+
+// Registrar os eventos iniciais
+registrarEventos();
 
 // Exporta funções para uso em outros módulos
 module.exports = {
