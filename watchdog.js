@@ -81,16 +81,49 @@ function extractFullError(logLine, pattern) {
   };
 }
 
-// Verificar logs e mostrar detalhes do erro
 function checkLogs() {
   try {
     // Verificar modificação do arquivo de log
     const stats = fs.statSync(LOG_FILE);
     const fileLastModified = stats.mtime.getTime();
     
-    if (fileLastModified > lastActivity) {
-      console.log(`Atividade detectada em: ${new Date(fileLastModified).toISOString()}`);
-      lastActivity = fileLastModified;
+    // Vamos analisar o conteúdo das modificações recentes
+    const logContent = fs.readFileSync(LOG_FILE, 'utf8');
+    const recentLines = logContent.split('\n').slice(-100); // Últimas 100 linhas
+    
+    // Verificar se as entradas mais recentes são apenas avisos de inatividade
+    let hasRealActivity = false;
+    let hasOnlyWarnings = true;
+    
+    for (const line of recentLines.slice(-10)) { // Analisar as 10 linhas mais recentes
+      const isWarningLine = line.includes('[warn]') && 
+                           (line.includes('Conexão WhatsApp inativa') || 
+                            line.includes('cliente não está realmente pronto') ||
+                            line.includes('Reconexão não surtiu efeito'));
+      
+      const isRealActivity = line.includes('Mensagem de') || 
+                             line.includes('Resposta:') ||
+                             (line.includes('[info]') && !line.includes('batimento') && !line.includes('Tentando reconexão'));
+      
+      if (isRealActivity) {
+        hasRealActivity = true;
+        hasOnlyWarnings = false;
+      } else if (!isWarningLine && line.trim() !== '') {
+        // Se não é um aviso de conexão e não está vazio, não é apenas avisos
+        hasOnlyWarnings = false;
+      }
+    }
+    
+    // Só atualizar a última atividade se houve atividade real
+    // OU se o tempo desde a última modificação é significativo
+    if (fileLastModified > lastActivity && (hasRealActivity || fileLastModified - lastActivity > 30000)) {
+      // Se temos apenas avisos de inatividade, não resetar o contador de inatividade
+      if (!hasOnlyWarnings) {
+        console.log(`Atividade detectada em ${new Date(fileLastModified).toISOString()}`);
+        lastActivity = fileLastModified;
+      } else {
+        console.log(`Modificação de arquivo detectada, mas contém apenas avisos de inatividade.`);
+      }
     }
     
     // Verificar erros recentes no log de erros
@@ -192,7 +225,7 @@ function checkLogs() {
       } else {
         // Reduzir a contagem de erros gradualmente se não encontrarmos novos
         // Redução mais agressiva para evitar falsos positivos
-        if (errorCount > 0 && Math.random() < 0.5) {  // Aumentei de 0.3 para 0.5
+        if (errorCount > 0 && Math.random() < 0.5) {
           errorCount--;
         }
       }
@@ -320,5 +353,5 @@ cleanupOldLogs();
 setInterval(cleanupOldLogs, 24 * 60 * 60 * 1000);
 
 // Iniciar monitoramento
-console.log('🔍 Watchdog aprimorado iniciado - monitorando apenas erros recentes do WhatsApp');
+console.log('🔍 Watchdog iniciado');
 setInterval(checkLogs, CHECK_INTERVAL);

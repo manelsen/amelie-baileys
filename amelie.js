@@ -21,7 +21,7 @@ const crypto                  = require('crypto');
 const fs                      = require('fs');
 const path                    = require('path');
 const { videoQueue, problemVideosQueue, getErrorMessageForUser, notificacoes } = require('./videoQueue');
-const HeartbeatSystem = require('./heartbeat');
+const SistemaDeBatimentos = require('./heartbeat');
 
 
 dotenv.config();
@@ -30,6 +30,7 @@ dotenv.config();
 const API_KEY                 = process.env.API_KEY;
 const MAX_HISTORY             = parseInt(process.env.MAX_HISTORY || '50');
 let BOT_NAME                  = process.env.BOT_NAME || 'Amélie';
+let LINK_GRUPO_OFICIAL        = 'https://chat.whatsapp.com/C0Ys7pQ6lZH5zqDD9A8cLp';
 
 let lastProcessedAudio        = null;
 let reconnectCount            = 0;
@@ -219,7 +220,7 @@ function getModelCacheKey(config) {
         Você lida com as pessoas com tato e bom humor.         
         Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie.         
         Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch. 
-        Se alguém quiser entrar no grupo oficial, o link é https://chat.whatsapp.com/C0Ys7pQ6lZH5zqDD9A8cLp.`
+        Se alguém quiser entrar no grupo oficial, o link é ${LINK_GRUPO_OFICIAL}.`
     } = config;
     
     // Cria uma chave baseada nos parâmetros de configuração
@@ -542,7 +543,7 @@ const ajudaText = `Olá! Eu sou a ${BOT_NAME}, sua assistente de AI multimídia 
 Minha idealizadora é a Belle Utsch. 
 
 Quer conhecê-la? Fala com ela em https://beacons.ai/belleutsch
-Quer entrar no grupo oficial da Amélie? O link é https://chat.whatsapp.com/C0Ys7pQ6lZH5zqDD9A8cLp
+Quer entrar no grupo oficial da ${BOT_NAME}? O link é ${LINK_GRUPO_OFICIAL}
 Meu repositório fica em https://github.com/manelsen/amelie
 
 Esses são meus comandos disponíveis para configuração:
@@ -579,6 +580,68 @@ client.on('group_join', async (notification) => {
         await chat.sendMessage('Olá a todos! Estou aqui para ajudar. Aqui estão alguns comandos que vocês podem usar:');
         await chat.sendMessage(ajudaText);
         logger.info(`Bot foi adicionado ao grupo "${group.title}" (${chat.id._serialized}) e enviou a saudação.`);
+    }
+});
+
+/**
+ * Evento de saída de um grupo
+ * Detecta quando a Amélie é removida de um grupo e registra no log
+ */
+client.on('group_leave', async (notification) => {
+    try {
+        // Verificar se o bot (Amélie) está entre os que saíram do grupo
+        if (notification.recipientIds.includes(client.info.wid._serialized)) {
+            // Obter informações do grupo se possível
+            let groupInfo = 'Grupo desconhecido';
+            let groupId = notification.chatId;
+            
+            // Tentar obter informações adicionais do grupo a partir do banco de dados
+            groupsDb.findOne({ id: groupId }, (err, group) => {
+                if (!err && group) {
+                    groupInfo = group.title || 'Grupo sem título';
+                    
+                    // Registrar a saída no log
+                    logger.info(`Bot foi removido do grupo "${groupInfo}" (${groupId})`);
+                    
+                    // Opcional: Marcar o grupo como inativo no banco de dados
+                    groupsDb.update(
+                        { id: groupId },
+                        { $set: { 
+                            active: false, 
+                            removedAt: new Date(),
+                            wasRemoved: true
+                        }},
+                        {},
+                        (updateErr) => {
+                            if (updateErr) {
+                                logger.error(`Erro ao atualizar status do grupo após remoção: ${updateErr.message}`);
+                            } else {
+                                logger.debug(`Status do grupo "${groupInfo}" atualizado para inativo`);
+                            }
+                        }
+                    );
+                } else {
+                    // Se não conseguir obter do banco de dados, usar apenas o ID
+                    logger.info(`Bot foi removido do grupo com ID ${groupId}`);
+                }
+            });
+            
+            // Se você quiser enviar uma mensagem para algum administrador ou para um log específico
+            try {
+                // Número do administrador ou grupo de log (opcional)
+                const adminNumber = process.env.ADMIN_NUMBER;
+                if (adminNumber) {
+                    await client.sendMessage(
+                        adminNumber, 
+                        `A Amélie foi removida do grupo "${groupInfo}" (${groupId}) em ${new Date().toLocaleString()}`
+                    );
+                }
+            } catch (notifyError) {
+                logger.error(`Erro ao notificar administrador sobre remoção: ${notifyError.message}`);
+            }
+        }
+    } catch (error) {
+        logger.error(`Erro ao processar evento de saída de grupo: ${error.message}`, { error });
     }
 });
 
@@ -1322,7 +1385,7 @@ async function handleVideoMessage(msg, videoData, chatId) {
             logger.info(`🚀 Vídeo adicionado à fila com sucesso: ${tempFilename} (Job ${jobId})`);
             
             // Emitir heartbeat para manter o watchdog feliz
-            logger.info(`💓 Heartbeat ${new Date().toISOString()} - Sistema ativo`);
+            logger.info(`💓 Batimento ${new Date().toISOString()} - Sistema ativo`);
             
         } catch (processingError) {
             logger.error(`❌ Erro ao processar vídeo: ${processingError.message}`);
@@ -2220,8 +2283,8 @@ setInterval(async () => {
   }, 60000);
 
 // Iniciar sistema de heartbeat para manter watchdog feliz
-const heartbeat = new HeartbeatSystem(logger, client);
-heartbeat.iniciar();
+const coracao = new SistemaDeBatimentos(logger, client);
+coracao.iniciar();
 
 /**
  * Verifica se o WhatsApp está realmente processando mensagens
@@ -2251,7 +2314,7 @@ async function verificarEstadoWhatsApp() {
       }).catch(() => false);
       
       if (!eventListenersAtivos) {
-        logger.warn("Conexão WebSocket do WhatsApp em estado zumbi, reconectando...");
+        logger.debug("Conexão WebSocket do WhatsApp em estado zumbi, reconectando...");
         reconectar();
       } else {
         logger.debug("WhatsApp parece estar funcionando corretamente");
@@ -2529,7 +2592,7 @@ async function reconectar() {
         logger.info("✅ Reconexão bem-sucedida!");
         falhasConsecutivas = 0;
       } else {
-        logger.warn("⚠️ Reconexão não surtiu efeito, aumentando contador de falhas");
+        logger.debug("⚠️ Reconexão não surtiu efeito, aumentando contador de falhas");
         falhasConsecutivas++;
         
         // Se já falhamos demais, fazer reinício completo
@@ -2561,7 +2624,7 @@ async function reconectar() {
   setInterval(verificarEstadoWhatsApp, 60000);
 
 // Log de inicialização
-logger.info('Sistema de processamento de vídeos em fila inicializado');
+logger.info('Sistema de fila de vídeos iniciado');
 
 // Tratamento de erros não capturados
 process.on('unhandledRejection', (reason, promise) => {
@@ -2596,7 +2659,7 @@ client.on('ready', () => {
  */
 async function reinicioCompleto() {
     try {
-      logger.info("🔄 Iniciando REINÍCIO COMPLETO do WhatsApp...");
+      logger.info("🔄 Reiniciando WhatsApp do zero...");
       
       // Marcar como não pronto para evitar operações durante o reinício
       clienteWhatsAppPronto = false;
@@ -2706,15 +2769,8 @@ async function reconectar() {
       } else {
         falhasConsecutivas++;
         logger.warn(`⚠️ Reconexão não surtiu efeito (falha ${falhasConsecutivas}/${MAX_FALHAS_ANTES_RESTART})`);
-        
-        // Se já falhamos demais, reiniciar o PROCESSO INTEIRO
         if (falhasConsecutivas >= MAX_FALHAS_ANTES_RESTART) {
-          logger.error(`⚠️ ATENÇÃO: Muitas falhas consecutivas (${falhasConsecutivas}), REINICIANDO PROCESSO!`);
-          
-          // Registrar estado atual
-          logger.info("📊 Estado antes do reinício:");
-          logger.info(`- Cliente pronto: ${clienteWhatsAppPronto}`);
-          logger.info(`- Conexão: ${client.info?.connected ? 'Conectado' : 'Desconectado'}`);
+          logger.error(`⚠️ ATENÇÃO: Muitas falhas consecutivas (${falhasConsecutivas}), reiniciando processo\n📊 Estado antes do reinício: - Cliente pronto: ${clienteWhatsAppPronto}; - Conexão: ${client.info?.connected ? 'Conectado' : 'Desconectado'}`);
           
           // Aguardar algumas mensagens serem salvas
           await new Promise(resolve => setTimeout(resolve, 2000));
