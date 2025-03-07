@@ -231,7 +231,7 @@ class GerenciadorMensagens {
       const ehGrupo = chat.id._serialized.endsWith('@g.us');
       
       // Verificar se é um comando
-      if (msg.body && msg.body.startsWith('!')) {
+      if (msg.body && msg.body.startsWith('.')) {
         return await this.processarComando(msg, chatId);
       }
       
@@ -293,32 +293,21 @@ Quer conhecê-la? Fala com ela em https://beacons.ai/belleutsch
 Quer entrar no grupo oficial da ${BOT_NAME}? O link é ${LINK_GRUPO_OFICIAL}
 Meu repositório fica em https://github.com/manelsen/amelie
 
-Esses são meus comandos disponíveis para configuração:
+Esses são meus comandos disponíveis para configuração.
 
-!cego - Aplica configurações para usuários com deficiência visual
+Use com um ponto antes da palavra de comando, sem espaço.
 
-!audio - Liga/desliga a transcrição de áudio
-!video - Liga/desliga a interpretação de vídeo
-!imagem - Liga/desliga a audiodescrição de imagem
+Comandos:
 
-!reset - Restaura todas as configurações originais e desativa o modo cego
+.cego - Aplica configurações para usuários com deficiência visual
 
-!prompt set <nome> <texto> - Define uma nova personalidade
-!prompt get <nome> - Mostra uma personalidade existente
-!prompt list - Lista todas as personalidades
-!prompt use <nome> - Usa uma personalidade específica
-!prompt delete <nome> - Exclui uma personalidade existente
-!prompt clear - Remove a personalidade ativa
+.audio - Liga/desliga a transcrição de áudio
+.video - Liga/desliga a interpretação de vídeo
+.imagem - Liga/desliga a audiodescrição de imagem
 
-!config set <param> <valor> - Define um parâmetro de configuração
-!config get [param] - Mostra a configuração atual
+.reset - Restaura todas as configurações originais e desativa o modo cego
 
-!users - Lista os usuários do grupo
-
-!filas status [todas|video|imagem] - Mostra status das filas
-!filas limpar [todas|video|imagem] [tudo] - Limpa filas de processamento
-
-!ajuda - Mostra esta mensagem de ajuda`;
+.ajuda - Mostra esta mensagem de ajuda`;
           
           await msg.reply(textoAjuda);
           return true;
@@ -356,7 +345,7 @@ Esses são meus comandos disponíveis para configuração:
           return true;
 
         default:
-          await msg.reply('Comando desconhecido. Use !ajuda para ver os comandos disponíveis.');
+          await msg.reply('Comando desconhecido. Use .ajuda para ver os comandos disponíveis.');
           return false;
       }
     } catch (erro) {
@@ -434,8 +423,8 @@ Esses são meus comandos disponíveis para configuração:
         
       default:
         await msg.reply(`Comando de filas desconhecido. Use:
-!filas status [todas|video|imagem] - Mostra status das filas
-!filas limpar [todas|video|imagem] [tudo] - Limpa filas (use 'tudo' para limpar mesmo trabalhos em andamento)`);
+.filas status [todas|video|imagem] - Mostra status das filas
+.filas limpar [todas|video|imagem] [tudo] - Limpa filas (use 'tudo' para limpar mesmo trabalhos em andamento)`);
     }
   }
 
@@ -470,30 +459,15 @@ Meu repositório fica em https://github.com/manelsen/amelie
 
 Esses são meus comandos disponíveis para configuração:
 
-!cego - Aplica configurações para usuários com deficiência visual
+.cego - Aplica configurações para usuários com deficiência visual
 
-!audio - Liga/desliga a transcrição de áudio
-!video - Liga/desliga a interpretação de vídeo
-!imagem - Liga/desliga a audiodescrição de imagem
+.audio - Liga/desliga a transcrição de áudio
+.video - Liga/desliga a interpretação de vídeo
+.imagem - Liga/desliga a audiodescrição de imagem
 
-!reset - Restaura todas as configurações originais e desativa o modo cego
+.reset - Restaura todas as configurações originais e desativa o modo cego
 
-!prompt set <nome> <texto> - Define uma nova personalidade
-!prompt get <nome> - Mostra uma personalidade existente
-!prompt list - Lista todas as personalidades
-!prompt use <nome> - Usa uma personalidade específica
-!prompt delete <nome> - Exclui uma personalidade existente
-!prompt clear - Remove a personalidade ativa
-
-!config set <param> <valor> - Define um parâmetro de configuração
-!config get [param] - Mostra a configuração atual
-
-!users - Lista os usuários do grupo
-
-!filas status [todas|video|imagem] - Mostra status das filas
-!filas limpar [todas|video|imagem] [tudo] - Limpa filas de processamento
-
-!ajuda - Mostra esta mensagem de ajuda`;
+.ajuda - Mostra esta mensagem de ajuda`;
 
         await chat.sendMessage(textoAjuda);
         
@@ -547,7 +521,7 @@ Esses são meus comandos disponíveis para configuração:
       await this.gerenciadorConfig.definirConfig(chatId, 'mediaAudio', false);
       
       const BOT_NAME = process.env.BOT_NAME || 'Amélie';
-      const promptAudiomar = `Seu nome é ${BOT_NAME}. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. Seus comandos podem ser encontrados digitando !ajuda. Se alguém perguntar, aqui está sua lista de comandos: !cego - Aplica configurações para usuários com deficiência visual; !audio - Liga/desliga a transcrição de áudio; !video - Liga/desliga a interpretação de vídeo; !imagem - Liga/desliga a audiodescrição de imagem; !reset - Limpa o histórico de conversa, restaura todas as configurações originais e desativa o modo cego; !prompt set <nome> <texto> - Define uma nova personalidade; !prompt get <nome> - Mostra uma personalidade existente; !prompt list - Lista todas as personalidades; !prompt use <nome> - Usa uma personalidade específica; !prompt delete <nome> - Exclui uma personalidade existente; !prompt clear - Remove a personalidade ativa; !config set <param> <valor> - Define um parâmetro de configuração; !config get [param] - Mostra a configuração atual; !users - Lista os usuários do grupo; !ajuda - Mostra esta mensagem de ajuda. Você não tem outros comandos e não aceita comandos sem a exclamação, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego. Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima. Sua criadora e idealizadora foi a Belle Utsch. Você é baseada no Google Gemini Flash 2.0. Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo. Você lida com as pessoas com tato e bom humor. Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie. Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch. Você é uma assistente de AI especializada em audiodescrição, projetada para funcionar em um grupo de WhatsApp. Sua função principal é descrever imagens e stickers compartilhados no grupo, fornecendo uma audiodescrição profissional, detalhada, didática e polida.
+      const promptAudiomar = `Seu nome é ${BOT_NAME}. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. Seus comandos podem ser encontrados digitando .ajuda. Se alguém perguntar, aqui está sua lista de comandos: .cego - Aplica configurações para usuários com deficiência visual; .audio - Liga/desliga a transcrição de áudio; .video - Liga/desliga a interpretação de vídeo; .imagem - Liga/desliga a audiodescrição de imagem; .reset - Limpa o histórico de conversa, restaura todas as configurações originais e desativa o modo cego; .ajuda - Mostra esta mensagem de ajuda. Você não tem outros comandos e não aceita comandos sem o ponto, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego. Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima. Sua criadora e idealizadora foi a Belle Utsch. Você é baseada no Google Gemini Flash 2.0. Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo. Você lida com as pessoas com tato e bom humor. Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie. Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch. Você é uma assistente de AI especializada em audiodescrição, projetada para funcionar em um grupo de WhatsApp. Sua função principal é descrever imagens e stickers compartilhados no grupo, fornecendo uma audiodescrição profissional, detalhada, didática e polida.
       
       Diretrizes Gerais:
       
@@ -903,7 +877,7 @@ async verificarMencaoBotNaMensagem(msg) {
       this.registrador.info(`Nova transação criada: ${transacao.id} para mensagem de imagem de ${remetente.name}`);
       
       // Enviar feedback inicial (opcional - avisa o usuário que a imagem está sendo processada)
-      await msg.reply("✨ Estou processando sua imagem! Aguarde um momento...");
+      // await msg.reply("✨ Estou processando sua imagem! Aguarde um momento...");
       
       // Marcar transação como processando
       await this.gerenciadorTransacoes.marcarComoProcessando(transacao.id);
@@ -1026,7 +1000,7 @@ async verificarMencaoBotNaMensagem(msg) {
       this.registrador.info(`Nova transação criada: ${transacao.id} para mensagem de vídeo de ${remetente.name}`);
       
       // Enviar feedback inicial e continuar processamento
-      await msg.reply("✨ Estou colocando seu vídeo na fila de processamento! Você receberá o resultado em breve...");
+      // await msg.reply("✨ Estou colocando seu vídeo na fila de processamento! Você receberá o resultado em breve...");
       
       // Marcar transação como processando
       await this.gerenciadorTransacoes.marcarComoProcessando(transacao.id);
@@ -1321,7 +1295,7 @@ case 'set':
     await this.gerenciadorConfig.definirPromptSistema(chatId, nome, textoPrompt);
     await msg.reply(`System Instruction "${nome}" definida com sucesso.`);
   } else {
-    await msg.reply('Uso correto: !prompt set <nome> <texto>');
+    await msg.reply('Uso correto: .prompt set <nome> <texto>');
   }
   break;
   
@@ -1334,7 +1308,7 @@ case 'get':
       await msg.reply(`System Instruction "${nome}" não encontrada.`);
     }
   } else {
-    await msg.reply('Uso correto: !prompt get <nome>');
+    await msg.reply('Uso correto: .prompt get <nome>');
   }
   break;
   
@@ -1358,7 +1332,7 @@ case 'use':
       await msg.reply(`System Instruction "${nome}" não encontrada.`);
     }
   } else {
-    await msg.reply('Uso correto: !prompt use <nome>');
+    await msg.reply('Uso correto: .prompt use <nome>');
   }
   break;
   
@@ -1392,12 +1366,12 @@ case 'delete':
       await msg.reply(`System Instruction "${nome}" não encontrada.`);
     }
   } else {
-    await msg.reply('Uso correto: !prompt delete <nome>');
+    await msg.reply('Uso correto: .prompt delete <nome>');
   }
   break;
   
 default:
-  await msg.reply('Subcomando de prompt desconhecido. Use !ajuda para ver os comandos disponíveis.');
+  await msg.reply('Subcomando de prompt desconhecido. Use .ajuda para ver os comandos disponíveis.');
 }
 }
 
@@ -1447,7 +1421,7 @@ case 'get':
   break;
   
 default:
-  await msg.reply('Subcomando de config desconhecido. Use !ajuda para ver os comandos disponíveis.');
+  await msg.reply('Subcomando de config desconhecido. Use .ajuda para ver os comandos disponíveis.');
 }
 }
 
