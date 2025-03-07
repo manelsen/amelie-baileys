@@ -49,7 +49,8 @@ class ClienteWhatsApp extends EventEmitter {
     this.cliente = new Client({
       authStrategy: new LocalAuth({ clientId: this.clienteId }),
       puppeteer: {
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        executablePath: '/usr/bin/google-chrome',
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '/usr/bin/google-chrome'],
       }
     });
 

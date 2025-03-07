@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const FilaProcessadorImagem = require('../queue/FilaProcessadorImagem');
+const FilaProcessador = require('../queue/FilaProcessador');
 
 class GerenciadorMensagens {
   /**
@@ -28,8 +29,23 @@ class GerenciadorMensagens {
     this.filaProcessamento = filaProcessamento;
     this.gerenciadorTransacoes = gerenciadorTransacoes;
     
-    // Inicializar a fila de processamento de imagem
-    this.filaProcessamentoImagem = new FilaProcessadorImagem(registrador, gerenciadorAI, clienteWhatsApp);
+    // Inicializar a fila de processamento, mas não delegar responsabilidades de resposta
+    // A fila agora apenas processa e retorna resultados para este gerenciador
+
+    this.filaProcessamento = new FilaProcessador(
+      registrador, 
+      gerenciadorAI, 
+      null, // Removendo referência direta ao clienteWhatsApp
+      { enviarRespostaDireta: false } // Configuração para impedir respostas diretas
+    );
+
+    this.filaProcessamentoImagem = new FilaProcessadorImagem(
+      registrador, 
+      gerenciadorAI, 
+      null, // Removendo referência direta ao clienteWhatsApp
+      { enviarRespostaDireta: false } // Configuração para impedir respostas diretas
+    );
+
     
     this.ultimoAudioProcessado = null;
     this.diretorioTemp = '../temp';
@@ -44,6 +60,75 @@ class GerenciadorMensagens {
     if (!fs.existsSync(this.diretorioTemp)) {
       fs.mkdirSync(this.diretorioTemp, { recursive: true });
       this.registrador.info('Diretório de arquivos temporários criado');
+    }
+    
+    // Configurar callback para receber resultados de processamento de imagem
+    this.configurarCallbacksProcessamento();
+  }
+
+  /**
+   * Configura callbacks para receber resultados do processamento de filas
+   */
+  configurarCallbacksProcessamento() {
+    // Registrar callback para receber respostas da fila de imagem
+    this.filaProcessamentoImagem.setRespostaCallback(async (resultado) => {
+      try {
+        const { resposta, chatId, messageId, senderNumber, transacaoId, remetenteName } = resultado;
+        
+        // Recuperar mensagem original por referência usando o ID da mensagem
+        let mensagemOriginal;
+        try {
+          mensagemOriginal = await this.clienteWhatsApp.cliente.getMessageById(messageId);
+        } catch (erroMsg) {
+          this.registrador.error(`Não foi possível recuperar a mensagem original: ${erroMsg.message}`);
+          // Tentar enviar sem referência caso não consiga recuperar
+          await this.clienteWhatsApp.enviarMensagem(senderNumber, resposta);
+          return;
+        }
+        
+        // Enviar resposta usando o cliente WhatsApp - o log será feito dentro deste método
+        await this.enviarResposta(mensagemOriginal, resposta);
+        
+        // Atualizar a transação se houver um ID
+        if (transacaoId) {
+          await this.gerenciadorTransacoes.adicionarRespostaTransacao(transacaoId, resposta);
+          await this.gerenciadorTransacoes.marcarComoEntregue(transacaoId);
+        }
+      } catch (erro) {
+        this.registrador.error(`Erro ao processar resultado da fila de imagem: ${erro.message}`, { erro });
+      }
+    });
+    
+    // Verificar se o processador de vídeo tem a função setResultCallback antes de chamar
+    if (this.filaProcessamento && typeof this.filaProcessamento.setResultCallback === 'function') {
+      this.filaProcessamento.setResultCallback(async (resultado) => {
+        try {
+          const { resposta, chatId, messageId, senderNumber, transacaoId, remetenteName } = resultado;
+          
+          // Similar ao callback de imagem, mas para vídeos
+          let mensagemOriginal;
+          try {
+            mensagemOriginal = await this.clienteWhatsApp.cliente.getMessageById(messageId);
+          } catch (erroMsg) {
+            this.registrador.error(`Não foi possível recuperar a mensagem de vídeo original: ${erroMsg.message}`);
+            await this.clienteWhatsApp.enviarMensagem(senderNumber, resposta);
+            return;
+          }
+          
+          // Enviar resposta - o log será feito dentro deste método
+          await this.enviarResposta(mensagemOriginal, resposta);
+          
+          // Atualizar a transação
+          if (transacaoId) {
+            await this.gerenciadorTransacoes.adicionarRespostaTransacao(transacaoId, resposta);
+            await this.gerenciadorTransacoes.marcarComoEntregue(transacaoId);
+          }
+        } catch (erro) {
+          this.registrador.error(`Erro ao processar resultado da fila de vídeo: ${erro.message}`, { erro });
+        }
+      });
+    } else {
+      this.registrador.warn('Fila de processamento de vídeo não suporta callbacks, algumas funcionalidades podem estar limitadas');
     }
   }
 
@@ -462,7 +547,7 @@ Esses são meus comandos disponíveis para configuração:
       await this.gerenciadorConfig.definirConfig(chatId, 'mediaAudio', false);
       
       const BOT_NAME = process.env.BOT_NAME || 'Amélie';
-      const promptAudiomar = `Seu nome é ${BOT_NAME}. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. Seus comandos podem ser encontrados digitando !ajuda. Se alguém perguntar, aqui está sua lista de comandos: !cego - Aplica configurações para usuários com deficiência visual; !audio - Liga/desliga a transcrição de áudio; !video - Liga/desliga a interpretação de vídeo; !imagem - Liga/desliga a audiodescrição de imagem; !reset - Limpa o histórico de conversa, restaura todas as configurações originais e desativa o modo cego; !prompt set <nome> <texto> - Define uma nova personalidade; !prompt get <nome> - Mostra uma personalidade existente; !prompt list - Lista todas as personalidades; !prompt use <nome> - Usa uma personalidade específica; !prompt delete <nome> - Exclui uma personalidade existente; !prompt clear - Remove a personalidade ativa; !config set <param> <valor> - Define um parâmetro de configuração; !config get [param] - Mostra a configuração atual; !users - Lista os usuários do grupo; !ajuda - Mostra esta mensagem de ajuda. Você não tem outros comandos e não aceita comandos sem a exclamação, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego. Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima. Sua criadora e idealizadora foi a Belle Utsch. Você é baseada no Google Gemini Flash 2.0. Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo. Você lida com as pessoas com tato e bom humor. Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie. Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch. Você é uma assistente de AI especializada em audiodescrição, projetada para funcionar em um grupo de WhatsApp com mais de 200 pessoas cegas. Sua função principal é descrever imagens e stickers compartilhados no grupo, fornecendo uma audiodescrição profissional, detalhada, didática e polida.
+      const promptAudiomar = `Seu nome é ${BOT_NAME}. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. Seus comandos podem ser encontrados digitando !ajuda. Se alguém perguntar, aqui está sua lista de comandos: !cego - Aplica configurações para usuários com deficiência visual; !audio - Liga/desliga a transcrição de áudio; !video - Liga/desliga a interpretação de vídeo; !imagem - Liga/desliga a audiodescrição de imagem; !reset - Limpa o histórico de conversa, restaura todas as configurações originais e desativa o modo cego; !prompt set <nome> <texto> - Define uma nova personalidade; !prompt get <nome> - Mostra uma personalidade existente; !prompt list - Lista todas as personalidades; !prompt use <nome> - Usa uma personalidade específica; !prompt delete <nome> - Exclui uma personalidade existente; !prompt clear - Remove a personalidade ativa; !config set <param> <valor> - Define um parâmetro de configuração; !config get [param] - Mostra a configuração atual; !users - Lista os usuários do grupo; !ajuda - Mostra esta mensagem de ajuda. Você não tem outros comandos e não aceita comandos sem a exclamação, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego. Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima. Sua criadora e idealizadora foi a Belle Utsch. Você é baseada no Google Gemini Flash 2.0. Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo. Você lida com as pessoas com tato e bom humor. Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie. Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch. Você é uma assistente de AI especializada em audiodescrição, projetada para funcionar em um grupo de WhatsApp. Sua função principal é descrever imagens e stickers compartilhados no grupo, fornecendo uma audiodescrição profissional, detalhada, didática e polida.
       
       Diretrizes Gerais:
       
@@ -593,6 +678,9 @@ async processarMensagemTexto(msg, chatId) {
       
       resposta = await this.gerarRespostaComTexto(textoHistorico, chatId);
     }
+
+    // Log no formato solicitado
+    this.registrador.info(`\nMensagem de ${remetente.name}: ${msg.body}\nResposta: ${resposta}`);
     
     // Adicionar resposta à transação
     await this.gerenciadorTransacoes.adicionarRespostaTransacao(transacao.id, resposta);
@@ -740,6 +828,7 @@ async verificarMencaoBotNaMensagem(msg) {
     try {
       const chat = await msg.getChat();
       const config = await this.gerenciadorConfig.obterConfig(chatId);
+      const remetente = await this.obterOuCriarUsuario(msg.author || msg.from, chat);
       
       if (!config.mediaAudio) {
         return false;
@@ -771,6 +860,9 @@ async verificarMencaoBotNaMensagem(msg) {
       // Processar o áudio com a IA
       const resultado = await this.gerenciadorAI.processarAudio(audioData, hashAudio, config);
       
+      // Log no formato solicitado
+      this.registrador.info(`\nMensagem de ${remetente.name}: [Áudio]\nResposta: ${resultado}`);
+      
       // Adicionar resposta à transação
       await this.gerenciadorTransacoes.adicionarRespostaTransacao(transacao.id, resultado);
       
@@ -795,7 +887,7 @@ async verificarMencaoBotNaMensagem(msg) {
   }
 
   /**
-   * Processa uma mensagem com imagem usando a nova fila de processamento
+   * Processa uma mensagem com imagem usando a fila de processamento desacoplada
    * @param {Object} msg - Mensagem do WhatsApp
    * @param {Object} imagemData - Dados da imagem
    * @param {string} chatId - ID do chat
@@ -805,6 +897,7 @@ async verificarMencaoBotNaMensagem(msg) {
     try {
       const chat = await msg.getChat();
       const config = await this.gerenciadorConfig.obterConfig(chatId);
+      const remetente = await this.obterOuCriarUsuario(msg.author || msg.from, chat);
       
       if (!config.mediaImage) {
         this.registrador.info(`Descrição de imagem desabilitada para o chat ${chatId}. Ignorando mensagem de imagem.`);
@@ -813,7 +906,7 @@ async verificarMencaoBotNaMensagem(msg) {
       
       // Criar transação para esta mensagem de imagem
       const transacao = await this.gerenciadorTransacoes.criarTransacao(msg, chat);
-      this.registrador.info(`Nova transação criada: ${transacao.id} para mensagem de imagem`);
+      this.registrador.info(`Nova transação criada: ${transacao.id} para mensagem de imagem de ${remetente.name}`);
       
       // Enviar feedback inicial (opcional - avisa o usuário que a imagem está sendo processada)
       await msg.reply("✨ Estou processando sua imagem! Aguarde um momento...");
@@ -839,7 +932,8 @@ async verificarMencaoBotNaMensagem(msg) {
         promptUsuario = msg.body.trim();
       }
       
-      // Adicionar à fila de processamento de imagem - SEM mensagemOriginal
+      // MUDANÇA IMPORTANTE: Adicionando à fila de imagem desacoplada,
+      // mas agora passando o callback para o gerenciador de mensagens
       await this.filaProcessamentoImagem.add('process-image', {
         imageData: imagemData, 
         chatId, 
@@ -847,15 +941,15 @@ async verificarMencaoBotNaMensagem(msg) {
         mimeType: imagemData.mimetype,
         userPrompt: promptUsuario,
         senderNumber: msg.from,
-        transacaoId: transacao.id
-        // Não incluir mensagemOriginal: msg aqui para evitar problemas de serialização
+        transacaoId: transacao.id,
+        remetenteName: remetente.name // Adicionando o nome do remetente para o log
       }, { 
         removeOnComplete: true,
         removeOnFail: false,
         timeout: 60000 // 1 minuto
       });
       
-      this.registrador.info(`🚀 Imagem adicionada à fila com sucesso (transação ${transacao.id})`);
+      this.registrador.info(`🚀 Imagem de ${remetente.name} adicionada à fila com sucesso (transação ${transacao.id})`);
       return true;
       
     } catch (erro) {
@@ -926,6 +1020,7 @@ async verificarMencaoBotNaMensagem(msg) {
     try {
       const chat = await msg.getChat();
       const config = await this.gerenciadorConfig.obterConfig(chatId);
+      const remetente = await this.obterOuCriarUsuario(msg.author || msg.from, chat);
       
       if (!config.mediaVideo) {
         this.registrador.info(`Descrição de vídeo desabilitada para o chat ${chatId}. Ignorando mensagem de vídeo.`);
@@ -934,7 +1029,7 @@ async verificarMencaoBotNaMensagem(msg) {
       
       // Criar transação para esta mensagem de vídeo
       const transacao = await this.gerenciadorTransacoes.criarTransacao(msg, chat);
-      this.registrador.info(`Nova transação criada: ${transacao.id} para mensagem de vídeo`);
+      this.registrador.info(`Nova transação criada: ${transacao.id} para mensagem de vídeo de ${remetente.name}`);
       
       // Enviar feedback inicial e continuar processamento
       await msg.reply("✨ Estou colocando seu vídeo na fila de processamento! Você receberá o resultado em breve...");
@@ -984,8 +1079,8 @@ Crie uma descrição organizada e acessível.`;
           mimeType: videoData.mimetype,
           userPrompt: promptUsuario,
           senderNumber: msg.from,
-          transacaoId: transacao.id
-          // Não incluir mensagemOriginal: msg aqui
+          transacaoId: transacao.id,
+          remetenteName: remetente.name // Adicionando o nome do remetente para o log
         }, { 
           jobId: trabalhoId,
           removeOnComplete: true,
@@ -993,7 +1088,7 @@ Crie uma descrição organizada e acessível.`;
           timeout: 300000 // 5 minutos
         });
         
-        this.registrador.info(`🚀 Vídeo adicionado à fila com sucesso: ${arquivoTemporario} (Job ${trabalhoId})`);
+        this.registrador.info(`🚀 Vídeo de ${remetente.name} adicionado à fila com sucesso: ${arquivoTemporario} (Job ${trabalhoId})`);
         return true;
         
       } catch (erroProcessamento) {
@@ -1048,347 +1143,347 @@ Crie uma descrição organizada e acessível.`;
       if (this.gerenciadorConfig) {
         return await this.gerenciadorConfig.obterOuCriarUsuario(remetente, this.clienteWhatsApp.cliente);
       }
+
+// Implementação alternativa caso o gerenciadorConfig não esteja disponível
+const contato = await this.clienteWhatsApp.cliente.getContactById(remetente);
       
-      // Implementação alternativa caso o gerenciadorConfig não esteja disponível
-      const contato = await this.clienteWhatsApp.cliente.getContactById(remetente);
-      
-      let nome = contato.pushname || contato.name || contato.shortName;
-      
-      if (!nome || nome.trim() === '') {
-        const idSufixo = remetente.substring(0, 6);
-        nome = `User${idSufixo}`;
-      }
-      
-      return {
-        id: remetente,
-        name: nome,
-        joinedAt: new Date()
-      };
-    } catch (erro) {
-      this.registrador.error(`Erro ao obter informações do usuário: ${erro.message}`);
-      const idSufixo = remetente.substring(0, 6);
-      return {
-        id: remetente,
-        name: `User${idSufixo}`,
-        joinedAt: new Date()
-      };
-    }
+let nome = contato.pushname || contato.name || contato.shortName;
+
+if (!nome || nome.trim() === '') {
+  const idSufixo = remetente.substring(0, 6);
+  nome = `User${idSufixo}`;
+}
+
+return {
+  id: remetente,
+  name: nome,
+  joinedAt: new Date()
+};
+} catch (erro) {
+this.registrador.error(`Erro ao obter informações do usuário: ${erro.message}`);
+const idSufixo = remetente.substring(0, 6);
+return {
+  id: remetente,
+  name: `User${idSufixo}`,
+  joinedAt: new Date()
+};
+}
+}
+
+/**
+* Envia uma resposta à mensagem original
+* @param {Object} mensagemOriginal - Mensagem original para responder
+* @param {string} texto - Texto da resposta
+* @returns {Promise<boolean>} Sucesso do envio
+*/
+async enviarResposta(mensagemOriginal, texto) {
+try {
+if (!texto || typeof texto !== 'string' || texto.trim() === '') {
+  this.registrador.error('Tentativa de enviar mensagem inválida:', { texto });
+  texto = "Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente.";
+}
+
+let textoReduzido = texto.trim();
+textoReduzido = textoReduzido.replace(/^(?:amélie:[\s]*)+/i, '');
+textoReduzido = textoReduzido.replace(/^(?:amelie:[\s]*)+/i, '');
+textoReduzido = textoReduzido.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n{3,}/g, '\n\n');
+
+// Obter informações do remetente e do chat
+const chat = await mensagemOriginal.getChat();
+const ehGrupo = chat.id._serialized.endsWith('@g.us');
+const remetente = await this.obterOuCriarUsuario(mensagemOriginal.author || mensagemOriginal.from);
+const nomeRemetente = remetente.name;
+
+// Preparar o texto de log
+let prefixoLog = `\nMensagem de ${nomeRemetente}`;
+
+// Adicionar informação do grupo, se aplicável
+if (ehGrupo) {
+  prefixoLog += ` no grupo "${chat.name || 'Desconhecido'}"`;
+}
+
+// Obter o corpo da mensagem original
+const mensagemOriginalTexto = mensagemOriginal.body || "[Mídia sem texto]";
+
+// Log no formato solicitado
+this.registrador.info(`${prefixoLog}: ${mensagemOriginalTexto}\nResposta: ${textoReduzido}`);
+
+// Enviar a mensagem usando o método atualizado do ClienteWhatsApp
+const chatId = chat.id._serialized;
+const enviado = await this.clienteWhatsApp.enviarMensagem(chatId, textoReduzido, mensagemOriginal);
+
+// Se não foi enviado mas também não lançou erro, é porque foi enfileirado
+if (!enviado) {
+  this.registrador.info(`Mensagem para ${chatId} colocada na fila de pendentes`);
+}
+
+return enviado;
+} catch (erro) {
+this.registrador.error('Erro ao enviar resposta:', { 
+  erro: erro.message,
+  stack: erro.stack,
+  texto: texto
+});
+
+// Tentar salvar como notificação pendente
+try {
+  const chatId = mensagemOriginal.chat.id._serialized;
+  await this.clienteWhatsApp.salvarNotificacaoPendente(chatId, texto, mensagemOriginal);
+  this.registrador.info(`Mensagem salva como notificação pendente para ${chatId}`);
+} catch (erroSalvar) {
+  this.registrador.error(`Falha ao salvar notificação pendente: ${erroSalvar.message}`);
+}
+
+return false; // Retornar false em vez de propagar o erro
+}
+}
+
+/**
+* Gera resposta baseada em texto e imagem
+* @param {string} promptUsuario - Prompt do usuário
+* @param {Object} imagemData - Dados da imagem
+* @param {string} chatId - ID do chat
+* @returns {Promise<string>} Resposta gerada
+*/
+async gerarRespostaComTextoEImagem(promptUsuario, imagemData, chatId) {
+try {
+const configUsuario = await this.gerenciadorConfig.obterConfig(chatId);
+
+const parteImagem = {
+  inlineData: {
+    data: imagemData.data.toString('base64'),
+    mimeType: imagemData.mimetype
   }
+};
 
-  /**
-   * Envia uma resposta à mensagem original
-   * @param {Object} mensagemOriginal - Mensagem original para responder
-   * @param {string} texto - Texto da resposta
-   * @returns {Promise<boolean>} Sucesso do envio
-   */
-  async enviarResposta(mensagemOriginal, texto) {
-    try {
-      if (!texto || typeof texto !== 'string' || texto.trim() === '') {
-        this.registrador.error('Tentativa de enviar mensagem inválida:', { texto });
-        texto = "Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente.";
-      }
-      
-      let textoReduzido = texto.trim();
-      textoReduzido = textoReduzido.replace(/^(?:amélie:[\s]*)+/i, '');
-      textoReduzido = textoReduzido.replace(/^(?:amelie:[\s]*)+/i, '');
-      textoReduzido = textoReduzido.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n{3,}/g, '\n\n');
-      
-      // Obter informações do remetente e do chat
-      const chat = await mensagemOriginal.getChat();
-      const ehGrupo = chat.id._serialized.endsWith('@g.us');
-      const remetente = await this.obterOuCriarUsuario(mensagemOriginal.author || mensagemOriginal.from);
-      const nomeRemetente = remetente.name;
-      
-      // Preparar o texto de log
-      let prefixoLog = `\nMensagem de ${nomeRemetente}`;
-      
-      // Adicionar informação do grupo, se aplicável
-      if (ehGrupo) {
-        prefixoLog += ` no grupo "${chat.name || 'Desconhecido'}"`;
-      }
-      
-      // Obter o corpo da mensagem original
-      const mensagemOriginalTexto = mensagemOriginal.body || "[Mídia sem texto]";
-      
-      // Log no formato solicitado
-      this.registrador.info(`${prefixoLog}: ${mensagemOriginalTexto}\nResposta: ${textoReduzido}`);
-      
-      // Enviar a mensagem usando o método atualizado do ClienteWhatsApp
-      const chatId = chat.id._serialized;
-      const enviado = await this.clienteWhatsApp.enviarMensagem(chatId, textoReduzido, mensagemOriginal);
-      
-      // Se não foi enviado mas também não lançou erro, é porque foi enfileirado
-      if (!enviado) {
-        this.registrador.info(`Mensagem para ${chatId} colocada na fila de pendentes`);
-      }
-      
-      return enviado;
-    } catch (erro) {
-      this.registrador.error('Erro ao enviar resposta:', { 
-        erro: erro.message,
-        stack: erro.stack,
-        texto: texto
-      });
-      
-      // Tentar salvar como notificação pendente
-      try {
-        const chatId = mensagemOriginal.chat.id._serialized;
-        await this.clienteWhatsApp.salvarNotificacaoPendente(chatId, texto, mensagemOriginal);
-        this.registrador.info(`Mensagem salva como notificação pendente para ${chatId}`);
-      } catch (erroSalvar) {
-        this.registrador.error(`Falha ao salvar notificação pendente: ${erroSalvar.message}`);
-      }
-      
-      return false; // Retornar false em vez de propagar o erro
-    }
+const partesConteudo = [
+  parteImagem,
+  { text: promptUsuario }
+];
+
+const modelo = this.gerenciadorAI.obterOuCriarModelo({
+  model: "gemini-2.0-flash",
+  temperature: configUsuario.temperature,
+  topK: configUsuario.topK,
+  topP: configUsuario.topP,
+  maxOutputTokens: configUsuario.maxOutputTokens,
+  systemInstruction: configUsuario.systemInstructions
+});
+
+// Adicionar timeout de 45 segundos
+const promessaResultado = modelo.generateContent(partesConteudo);
+const promessaTimeout = new Promise((_, reject) => 
+  setTimeout(() => reject(new Error("Timeout da API Gemini")), 45000)
+);
+
+const resultado = await Promise.race([promessaResultado, promessaTimeout]);
+let textoResposta = resultado.response.text();
+
+if (!textoResposta) {
+  throw new Error('Resposta vazia gerada pelo modelo');
+}
+
+textoResposta = this.removerEmojis(textoResposta);
+
+return textoResposta;
+} catch (erro) {
+this.registrador.error(`Erro ao gerar resposta com texto e imagem: ${erro.message}`);
+return "Desculpe, ocorreu um erro ao gerar a resposta para a imagem. Por favor, tente novamente ou reformule sua pergunta.";
+}
+}
+
+/**
+* Gera resposta baseada apenas em texto
+* @param {string} promptUsuario - Prompt do usuário
+* @param {string} chatId - ID do chat
+* @returns {Promise<string>} Resposta gerada
+*/
+async gerarRespostaComTexto(promptUsuario, chatId) {
+try {
+const configUsuario = await this.gerenciadorConfig.obterConfig(chatId);
+
+// Usar o gerenciadorAI para processar o texto
+return await this.gerenciadorAI.processarTexto(promptUsuario, configUsuario);
+} catch (erro) {
+this.registrador.error(`Erro ao gerar resposta de texto: ${erro.message}`);
+return "Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente ou reformule sua pergunta.";
+}
+}
+
+/**
+* Processa comandos relacionados a prompts
+* @param {Object} msg - Mensagem recebida
+* @param {Array} args - Argumentos do comando
+* @param {string} chatId - ID do chat
+* @async
+*/
+async tratarComandoPrompt(msg, args, chatId) {
+const [subcomando, nome, ...resto] = args;
+
+switch (subcomando) {
+case 'set':
+  if (nome && resto.length > 0) {
+    const textoPrompt = resto.join(' ');
+    await this.gerenciadorConfig.definirPromptSistema(chatId, nome, textoPrompt);
+    await msg.reply(`System Instruction "${nome}" definida com sucesso.`);
+  } else {
+    await msg.reply('Uso correto: !prompt set <nome> <texto>');
   }
-
-  /**
-   * Gera resposta baseada em texto e imagem
-   * @param {string} promptUsuario - Prompt do usuário
-   * @param {Object} imagemData - Dados da imagem
-   * @param {string} chatId - ID do chat
-   * @returns {Promise<string>} Resposta gerada
-   */
-  async gerarRespostaComTextoEImagem(promptUsuario, imagemData, chatId) {
-    try {
-      const configUsuario = await this.gerenciadorConfig.obterConfig(chatId);
-
-      const parteImagem = {
-        inlineData: {
-          data: imagemData.data.toString('base64'),
-          mimeType: imagemData.mimetype
-        }
-      };
-
-      const partesConteudo = [
-        parteImagem,
-        { text: promptUsuario }
-      ];
-
-      const modelo = this.gerenciadorAI.obterOuCriarModelo({
-        model: "gemini-2.0-flash",
-        temperature: configUsuario.temperature,
-        topK: configUsuario.topK,
-        topP: configUsuario.topP,
-        maxOutputTokens: configUsuario.maxOutputTokens,
-        systemInstruction: configUsuario.systemInstructions
-      });
-
-      // Adicionar timeout de 45 segundos
-      const promessaResultado = modelo.generateContent(partesConteudo);
-      const promessaTimeout = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error("Timeout da API Gemini")), 45000)
-      );
+  break;
+  
+case 'get':
+  if (nome) {
+    const prompt = await this.gerenciadorConfig.obterPromptSistema(chatId, nome);
+    if (prompt) {
+      await msg.reply(`System Instruction "${nome}":\n${prompt.text}`);
+    } else {
+      await msg.reply(`System Instruction "${nome}" não encontrada.`);
+    }
+  } else {
+    await msg.reply('Uso correto: !prompt get <nome>');
+  }
+  break;
+  
+case 'list':
+  const prompts = await this.gerenciadorConfig.listarPromptsSistema(chatId);
+  if (prompts.length > 0) {
+    const listaPrompts = prompts.map(p => p.name).join(', ');
+    await msg.reply(`System Instructions disponíveis: ${listaPrompts}`);
+  } else {
+    await msg.reply('Nenhuma System Instruction definida.');
+  }
+  break;
+  
+case 'use':
+  if (nome) {
+    const prompt = await this.gerenciadorConfig.obterPromptSistema(chatId, nome);
+    if (prompt) {
+      await this.gerenciadorConfig.definirPromptSistemaAtivo(chatId, nome);
+      await msg.reply(`System Instruction "${nome}" ativada para este chat.`);
+    } else {
+      await msg.reply(`System Instruction "${nome}" não encontrada.`);
+    }
+  } else {
+    await msg.reply('Uso correto: !prompt use <nome>');
+  }
+  break;
+  
+case 'clear':
+  await this.gerenciadorConfig.limparPromptSistemaAtivo(chatId);
+  await msg.reply('System Instruction removida. Usando o modelo padrão.');
+  break;
+  
+case 'delete':
+  if (nome) {
+    // Verificar se o prompt existe antes de tentar excluir
+    const promptExiste = await this.gerenciadorConfig.obterPromptSistema(chatId, nome);
+    if (promptExiste) {
+      // Verificar se o prompt está ativo
+      const config = await this.gerenciadorConfig.obterConfig(chatId);
+      const estaAtivo = config.activePrompt === nome;
       
-      const resultado = await Promise.race([promessaResultado, promessaTimeout]);
-      let textoResposta = resultado.response.text();
-
-      if (!textoResposta) {
-        throw new Error('Resposta vazia gerada pelo modelo');
-      }
-
-      textoResposta = this.removerEmojis(textoResposta);
-
-      return textoResposta;
-    } catch (erro) {
-      this.registrador.error(`Erro ao gerar resposta com texto e imagem: ${erro.message}`);
-      return "Desculpe, ocorreu um erro ao gerar a resposta para a imagem. Por favor, tente novamente ou reformule sua pergunta.";
-    }
-  }
-
-  /**
-   * Gera resposta baseada apenas em texto
-   * @param {string} promptUsuario - Prompt do usuário
-   * @param {string} chatId - ID do chat
-   * @returns {Promise<string>} Resposta gerada
-   */
-  async gerarRespostaComTexto(promptUsuario, chatId) {
-    try {
-      const configUsuario = await this.gerenciadorConfig.obterConfig(chatId);
+      // Excluir o prompt
+      const sucesso = await this.gerenciadorConfig.excluirPromptSistema(chatId, nome);
       
-      // Usar o gerenciadorAI para processar o texto
-      return await this.gerenciadorAI.processarTexto(promptUsuario, configUsuario);
-    } catch (erro) {
-      this.registrador.error(`Erro ao gerar resposta de texto: ${erro.message}`);
-      return "Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente ou reformule sua pergunta.";
-    }
-  }
-
-  /**
-   * Processa comandos relacionados a prompts
-   * @param {Object} msg - Mensagem recebida
-   * @param {Array} args - Argumentos do comando
-   * @param {string} chatId - ID do chat
-   * @async
-   */
-  async tratarComandoPrompt(msg, args, chatId) {
-    const [subcomando, nome, ...resto] = args;
-
-    switch (subcomando) {
-      case 'set':
-        if (nome && resto.length > 0) {
-          const textoPrompt = resto.join(' ');
-          await this.gerenciadorConfig.definirPromptSistema(chatId, nome, textoPrompt);
-          await msg.reply(`System Instruction "${nome}" definida com sucesso.`);
-        } else {
-          await msg.reply('Uso correto: !prompt set <nome> <texto>');
+      if (sucesso) {
+        // Se o prompt excluído estava ativo, desativá-lo
+        if (estaAtivo) {
+          await this.gerenciadorConfig.limparPromptSistemaAtivo(chatId);
         }
-        break;
-        
-      case 'get':
-        if (nome) {
-          const prompt = await this.gerenciadorConfig.obterPromptSistema(chatId, nome);
-          if (prompt) {
-            await msg.reply(`System Instruction "${nome}":\n${prompt.text}`);
-          } else {
-            await msg.reply(`System Instruction "${nome}" não encontrada.`);
-          }
-        } else {
-          await msg.reply('Uso correto: !prompt get <nome>');
-        }
-        break;
-        
-      case 'list':
-        const prompts = await this.gerenciadorConfig.listarPromptsSistema(chatId);
-        if (prompts.length > 0) {
-          const listaPrompts = prompts.map(p => p.name).join(', ');
-          await msg.reply(`System Instructions disponíveis: ${listaPrompts}`);
-        } else {
-          await msg.reply('Nenhuma System Instruction definida.');
-        }
-        break;
-        
-      case 'use':
-        if (nome) {
-          const prompt = await this.gerenciadorConfig.obterPromptSistema(chatId, nome);
-          if (prompt) {
-            await this.gerenciadorConfig.definirPromptSistemaAtivo(chatId, nome);
-            await msg.reply(`System Instruction "${nome}" ativada para este chat.`);
-          } else {
-            await msg.reply(`System Instruction "${nome}" não encontrada.`);
-          }
-        } else {
-          await msg.reply('Uso correto: !prompt use <nome>');
-        }
-        break;
-        
-      case 'clear':
-        await this.gerenciadorConfig.limparPromptSistemaAtivo(chatId);
-        await msg.reply('System Instruction removida. Usando o modelo padrão.');
-        break;
-        
-      case 'delete':
-        if (nome) {
-          // Verificar se o prompt existe antes de tentar excluir
-          const promptExiste = await this.gerenciadorConfig.obterPromptSistema(chatId, nome);
-          if (promptExiste) {
-            // Verificar se o prompt está ativo
-            const config = await this.gerenciadorConfig.obterConfig(chatId);
-            const estaAtivo = config.activePrompt === nome;
-            
-            // Excluir o prompt
-            const sucesso = await this.gerenciadorConfig.excluirPromptSistema(chatId, nome);
-            
-            if (sucesso) {
-              // Se o prompt excluído estava ativo, desativá-lo
-              if (estaAtivo) {
-                await this.gerenciadorConfig.limparPromptSistemaAtivo(chatId);
-              }
-              await msg.reply(`System Instruction "${nome}" excluída com sucesso.`);
-            } else {
-              await msg.reply(`Erro ao excluir System Instruction "${nome}".`);
-            }
-          } else {
-            await msg.reply(`System Instruction "${nome}" não encontrada.`);
-          }
-        } else {
-          await msg.reply('Uso correto: !prompt delete <nome>');
-        }
-        break;
-        
-      default:
-        await msg.reply('Subcomando de prompt desconhecido. Use !ajuda para ver os comandos disponíveis.');
-    }
-  }
-
-  /**
-   * Processa comandos relacionados a configurações
-   * @param {Object} msg - Mensagem recebida
-   * @param {Array} args - Argumentos do comando
-   * @param {string} chatId - ID do chat
-   * @async
-   */
-  async tratarComandoConfig(msg, args, chatId) {
-    const [subcomando, param, valor] = args;
-
-    switch (subcomando) {
-      case 'set':
-        if (param && valor) {
-          if (['temperature', 'topK', 'topP', 'maxOutputTokens', 'mediaImage', 'mediaAudio', 'mediaVideo'].includes(param)) {
-            const valorNum = (param.startsWith('media')) ? (valor === 'true') : parseFloat(valor);
-            if (!isNaN(valorNum) || typeof valorNum === 'boolean') {
-              await this.gerenciadorConfig.definirConfig(chatId, param, valorNum);
-              await msg.reply(`Parâmetro ${param} definido como ${valorNum}`);
-            } else {
-              await msg.reply(`Valor inválido para ${param}. Use um número ou "true"/"false" se for mídia.`);
-            }
-          } else {
-            await msg.reply(`Parâmetro desconhecido: ${param}`);
-          }
-        } else {
-          await msg.reply('Uso correto: !config set <param> <valor>');
-        }
-        break;
-        
-      case 'get':
-        const config = await this.gerenciadorConfig.obterConfig(chatId);
-        if (param) {
-          if (config.hasOwnProperty(param)) {
-            await msg.reply(`${param}: ${config[param]}`);
-          } else {
-            await msg.reply(`Parâmetro desconhecido: ${param}`);
-          }
-        } else {
-          const textoConfig = Object.entries(config)
-            .map(([chave, valor]) => `${chave}: ${valor}`)
-            .join('\n');
-          await msg.reply(`Configuração atual:\n${textoConfig}`);
-        }
-        break;
-        
-      default:
-        await msg.reply('Subcomando de config desconhecido. Use !ajuda para ver os comandos disponíveis.');
-    }
-  }
-
-  /**
-   * Lista os usuários de um grupo
-   * @param {Object} msg - Mensagem recebida
-   * @param {string} chatId - ID do chat (opcional)
-   * @async
-   */
-  async listarUsuariosGrupo(msg, chatId) {
-    try {
-      const chat = await msg.getChat();
-      if (chat.isGroup) {
-        const grupo = await this.gerenciadorConfig.obterOuCriarGrupo(chat);
-        
-        const participantes = await chat.participants;
-        const listaUsuarios = await Promise.all(participantes.map(async (p) => {
-          const usuario = await this.obterOuCriarUsuario(p.id._serialized, chat);
-          return `${usuario.name} (${p.id.user})`;
-        }));
-        
-        await msg.reply(`Usuários no grupo "${grupo.title}":\n${listaUsuarios.join('\n')}`);
+        await msg.reply(`System Instruction "${nome}" excluída com sucesso.`);
       } else {
-        await msg.reply('Este comando só funciona em grupos.');
+        await msg.reply(`Erro ao excluir System Instruction "${nome}".`);
       }
-    } catch (erro) {
-      this.registrador.error(`Erro ao listar usuários do grupo: ${erro.message}`);
-      await msg.reply('Desculpe, ocorreu um erro ao listar os usuários do grupo.');
+    } else {
+      await msg.reply(`System Instruction "${nome}" não encontrada.`);
     }
+  } else {
+    await msg.reply('Uso correto: !prompt delete <nome>');
   }
+  break;
+  
+default:
+  await msg.reply('Subcomando de prompt desconhecido. Use !ajuda para ver os comandos disponíveis.');
+}
+}
+
+/**
+* Processa comandos relacionados a configurações
+* @param {Object} msg - Mensagem recebida
+* @param {Array} args - Argumentos do comando
+* @param {string} chatId - ID do chat
+* @async
+*/
+async tratarComandoConfig(msg, args, chatId) {
+const [subcomando, param, valor] = args;
+
+switch (subcomando) {
+case 'set':
+  if (param && valor) {
+    if (['temperature', 'topK', 'topP', 'maxOutputTokens', 'mediaImage', 'mediaAudio', 'mediaVideo'].includes(param)) {
+      const valorNum = (param.startsWith('media')) ? (valor === 'true') : parseFloat(valor);
+      if (!isNaN(valorNum) || typeof valorNum === 'boolean') {
+        await this.gerenciadorConfig.definirConfig(chatId, param, valorNum);
+        await msg.reply(`Parâmetro ${param} definido como ${valorNum}`);
+      } else {
+        await msg.reply(`Valor inválido para ${param}. Use um número ou "true"/"false" se for mídia.`);
+      }
+    } else {
+      await msg.reply(`Parâmetro desconhecido: ${param}`);
+    }
+  } else {
+    await msg.reply('Uso correto: !config set <param> <valor>');
+  }
+  break;
+  
+case 'get':
+  const config = await this.gerenciadorConfig.obterConfig(chatId);
+  if (param) {
+    if (config.hasOwnProperty(param)) {
+      await msg.reply(`${param}: ${config[param]}`);
+    } else {
+      await msg.reply(`Parâmetro desconhecido: ${param}`);
+    }
+  } else {
+    const textoConfig = Object.entries(config)
+      .map(([chave, valor]) => `${chave}: ${valor}`)
+      .join('\n');
+    await msg.reply(`Configuração atual:\n${textoConfig}`);
+  }
+  break;
+  
+default:
+  await msg.reply('Subcomando de config desconhecido. Use !ajuda para ver os comandos disponíveis.');
+}
+}
+
+/**
+* Lista os usuários de um grupo
+* @param {Object} msg - Mensagem recebida
+* @param {string} chatId - ID do chat (opcional)
+* @async
+*/
+async listarUsuariosGrupo(msg, chatId) {
+try {
+const chat = await msg.getChat();
+if (chat.isGroup) {
+  const grupo = await this.gerenciadorConfig.obterOuCriarGrupo(chat);
+  
+  const participantes = await chat.participants;
+  const listaUsuarios = await Promise.all(participantes.map(async (p) => {
+    const usuario = await this.obterOuCriarUsuario(p.id._serialized, chat);
+    return `${usuario.name} (${p.id.user})`;
+  }));
+  
+  await msg.reply(`Usuários no grupo "${grupo.title}":\n${listaUsuarios.join('\n')}`);
+} else {
+  await msg.reply('Este comando só funciona em grupos.');
+}
+} catch (erro) {
+this.registrador.error(`Erro ao listar usuários do grupo: ${erro.message}`);
+await msg.reply('Desculpe, ocorreu um erro ao listar os usuários do grupo.');
+}
+}
 }
 
 module.exports = GerenciadorMensagens;

@@ -2,7 +2,7 @@
  * FilaProcessadorImagem - Gerencia filas de processamento assíncrono para imagens
  * 
  * Este módulo centraliza o gerenciamento de filas de processamento de imagens,
- * seguindo a mesma abordagem do processamento de vídeos.
+ * seguindo abordagem desacoplada (não envia respostas diretamente).
  */
 
 const Queue = require('bull');
@@ -15,13 +15,20 @@ class FilaProcessadorImagem {
    * Cria uma instância do gerenciador de filas para imagens
    * @param {Object} registrador - Objeto logger para registro de eventos
    * @param {Object} gerenciadorAI - Instância do gerenciador de IA
-   * @param {Object} clienteWhatsApp - Instância do cliente WhatsApp
+   * @param {Object} clienteWhatsApp - Instância do cliente WhatsApp (opcional, removido do fluxo direto)
    * @param {Object} opcoes - Opções de configuração
    */
   constructor(registrador, gerenciadorAI, clienteWhatsApp, opcoes = {}) {
     this.registrador = registrador;
     this.gerenciadorAI = gerenciadorAI;
-    this.clienteWhatsApp = clienteWhatsApp;
+    this.clienteWhatsApp = null; // Removido acesso direto
+    this.opcoes = {
+      enviarRespostaDireta: false,
+      ...opcoes
+    };
+    
+    // Callback para retornar resultados ao invés de enviar diretamente
+    this.respostaCallback = null;
     
     const redisConfig = {
       host: process.env.REDIS_HOST || 'localhost',
@@ -61,7 +68,16 @@ class FilaProcessadorImagem {
     this.configurarProcessadores();
     this.iniciarMonitoramento();
     
-    this.registrador.info('✨ Sistema de filas para imagens inicializado com processamento em estágios');
+    this.registrador.info('✨ Sistema de filas para imagens inicializado com padrão desacoplado');
+  }
+
+  /**
+   * Define o callback para receber os resultados do processamento
+   * @param {Function} callback - Função a ser chamada com os resultados
+   */
+  setRespostaCallback(callback) {
+    this.respostaCallback = callback;
+    this.registrador.info('✅ Callback de resposta configurado para o processador de imagens');
   }
 
   /**
@@ -133,7 +149,7 @@ class FilaProcessadorImagem {
   configurarProcessadores() {
     // 1. Processador para upload/preparo de imagem
     this.imageUploadQueue.process('upload-image', 5, async (job) => {
-      const { imageData, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId } = job.data;
+      const { imageData, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId, remetenteName } = job.data;
       
       try {
         this.registrador.info(`[Etapa 1] Iniciando preparo da imagem para análise (Job ${job.id})`);
@@ -152,6 +168,7 @@ class FilaProcessadorImagem {
           userPrompt,
           senderNumber,
           transacaoId,
+          remetenteName,
           uploadTimestamp: Date.now()
         });
         
@@ -173,22 +190,31 @@ class FilaProcessadorImagem {
             jobId: job.id
           });
           
-          // Notificar o usuário com uma mensagem específica para bloqueio de segurança
-          try {
-            await this.clienteWhatsApp.enviarMensagem(
-              senderNumber, 
-              "Este conteúdo não pôde ser processado por questões de segurança."
-            );
-          } catch (errMsg) {
-            this.registrador.error(`Não consegui notificar sobre o bloqueio: ${errMsg.message}`);
+          // Notificar via callback em vez de diretamente
+          if (this.respostaCallback) {
+            this.respostaCallback({
+              resposta: "Este conteúdo não pôde ser processado por questões de segurança.",
+              chatId,
+              messageId,
+              senderNumber,
+              transacaoId,
+              isError: true,
+              errorType: 'safety'
+            });
           }
         } else {
-          // Notificar o usuário sobre outros tipos de erro
-          try {
+          // Notificar sobre outros tipos de erro via callback
+          if (this.respostaCallback) {
             const errorMessage = this.obterMensagemErroAmigavel(erro);
-            await this.clienteWhatsApp.enviarMensagem(senderNumber, errorMessage);
-          } catch (err) {
-            this.registrador.error(`Não consegui notificar sobre o erro: ${err.message}`);
+            this.respostaCallback({
+              resposta: errorMessage,
+              chatId,
+              messageId,
+              senderNumber,
+              transacaoId,
+              isError: true,
+              errorType: 'general'
+            });
           }
         }
         
@@ -200,22 +226,22 @@ class FilaProcessadorImagem {
     this.imageAnalysisQueue.process('analyze-image', 5, async (job) => {
       const { 
         imageData, chatId, messageId, mimeType, userPrompt, senderNumber, 
-        transacaoId, uploadTimestamp 
+        transacaoId, uploadTimestamp, remetenteName 
       } = job.data;
       
       try {
         this.registrador.info(`[Etapa 2] Iniciando análise da imagem (Job ${job.id})`);
         
-        // Se a análise está demorando, notificar o usuário
-        if (Date.now() - uploadTimestamp > 10000) {
-          try {
-            await this.clienteWhatsApp.enviarMensagem(
-              senderNumber, 
-              "Estou analisando sua imagem... isso pode levar alguns segundos."
-            );
-          } catch (err) {
-            this.registrador.warn(`Não consegui enviar atualização de progresso: ${err.message}`);
-          }
+        // Se a análise está demorando, notificar via callback
+        if (Date.now() - uploadTimestamp > 10000 && this.respostaCallback) {
+          this.respostaCallback({
+            resposta: "Estou analisando sua imagem... isso pode levar alguns segundos.",
+            chatId,
+            messageId,
+            senderNumber,
+            transacaoId,
+            isProgress: true
+          });
         }
         
         // Obter configurações do usuário
@@ -252,9 +278,20 @@ class FilaProcessadorImagem {
           resposta = "Não consegui gerar uma descrição clara para esta imagem.";
         }
         
-        // Enviar resposta
-        await this.clienteWhatsApp.enviarMensagem(senderNumber, resposta, messageId);
-        this.registrador.info(`[Etapa 2] Resposta de imagem enviada para ${senderNumber}`);
+        // Enviar resposta através do callback em vez de diretamente
+        if (this.respostaCallback) {
+          this.respostaCallback({
+            resposta,
+            chatId,
+            messageId,
+            senderNumber,
+            transacaoId,
+            remetenteName
+          });
+          this.registrador.info(`[Etapa 2] Resposta de imagem enviada para callback - Transação ${transacaoId}`);
+        } else {
+          this.registrador.warn(`[Etapa 2] Não há callback configurado para receber a resposta - Transação ${transacaoId}`);
+        }
         
         return { success: true };
       } catch (erro) {
@@ -274,22 +311,31 @@ class FilaProcessadorImagem {
             jobId: job.id
           });
           
-          // Notificar o usuário com uma mensagem específica para bloqueio de segurança
-          try {
-            await this.clienteWhatsApp.enviarMensagem(
-              senderNumber, 
-              "Este conteúdo não pôde ser processado por questões de segurança."
-            );
-          } catch (errMsg) {
-            this.registrador.error(`Não consegui notificar sobre o bloqueio: ${errMsg.message}`);
+          // Notificar via callback
+          if (this.respostaCallback) {
+            this.respostaCallback({
+              resposta: "Este conteúdo não pôde ser processado por questões de segurança.",
+              chatId,
+              messageId,
+              senderNumber,
+              transacaoId,
+              isError: true,
+              errorType: 'safety'
+            });
           }
         } else {
-          // Notificar o usuário sobre outros tipos de erro
-          try {
+          // Notificar sobre outros tipos de erro via callback
+          if (this.respostaCallback) {
             const errorMessage = this.obterMensagemErroAmigavel(erro);
-            await this.clienteWhatsApp.enviarMensagem(senderNumber, errorMessage);
-          } catch (err) {
-            this.registrador.error(`Não consegui notificar sobre o erro: ${err.message}`);
+            this.respostaCallback({
+              resposta: errorMessage,
+              chatId,
+              messageId,
+              senderNumber,
+              transacaoId,
+              isError: true,
+              errorType: 'general'
+            });
           }
         }
         
@@ -299,14 +345,14 @@ class FilaProcessadorImagem {
     
     // Processador para compatibilidade com o código existente
     this.imageQueue.process('process-image', 5, async (job) => {
-      const { imageData, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId } = job.data;
+      const { imageData, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId, remetenteName } = job.data;
       
       try {
         this.registrador.info(`Processando imagem através da fila principal (Job ${job.id})`);
         
         // Redirecionar para o novo fluxo de processamento em estágios
         const uploadJob = await this.imageUploadQueue.add('upload-image', {
-          imageData, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId
+          imageData, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId, remetenteName
         });
         
         this.registrador.info(`Imagem redirecionada para o novo fluxo, job ID: ${uploadJob.id}`);
@@ -328,6 +374,33 @@ class FilaProcessadorImagem {
             transacaoId,
             jobId: job.id
           });
+          
+          // Notificar via callback
+          if (this.respostaCallback) {
+            this.respostaCallback({
+              resposta: "Este conteúdo não pôde ser processado por questões de segurança.",
+              chatId,
+              messageId,
+              senderNumber,
+              transacaoId,
+              isError: true,
+              errorType: 'safety'
+            });
+          }
+        } else {
+          // Notificar sobre outros tipos de erro via callback
+          if (this.respostaCallback) {
+            const errorMessage = this.obterMensagemErroAmigavel(erro);
+            this.respostaCallback({
+              resposta: errorMessage,
+              chatId,
+              messageId,
+              senderNumber,
+              transacaoId,
+              isError: true,
+              errorType: 'general'
+            });
+          }
         }
         
         throw erro;
@@ -413,6 +486,23 @@ class FilaProcessadorImagem {
       }).catch(err => {
         this.registrador.error(`Erro ao registrar falha: ${err.message}`);
       });
+      
+      // Notificar via callback sobre a falha se não houver sido feito ainda
+      if (this.respostaCallback && job.data && !job.data._notificationSent) {
+        const errorMessage = this.obterMensagemErroAmigavel(error);
+        this.respostaCallback({
+          resposta: errorMessage,
+          chatId: job.data.chatId,
+          messageId: job.data.messageId,
+          senderNumber: job.data.senderNumber,
+          transacaoId: job.data.transacaoId,
+          isError: true,
+          errorType: 'queue_failure'
+        });
+        
+        // Marcar que já notificamos para não duplicar
+        job.data._notificationSent = true;
+      }
     });
     
     queue.on('error', (error) => {
@@ -641,7 +731,7 @@ class FilaProcessadorImagem {
       } catch (err) {
         this.registrador.error('Erro ao verificar status das filas de imagem:', err);
       }
-    }, 5 * 60 * 1000); // A cada 5 minutos
+    }, 60 * 60 * 1000); // A cada hora
   }
 
   /**
