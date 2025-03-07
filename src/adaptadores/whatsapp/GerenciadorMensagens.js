@@ -679,9 +679,6 @@ async processarMensagemTexto(msg, chatId) {
       resposta = await this.gerarRespostaComTexto(textoHistorico, chatId);
     }
 
-    // Log no formato solicitado
-    this.registrador.info(`\nMensagem de ${remetente.name}: ${msg.body}\nResposta: ${resposta}`);
-    
     // Adicionar resposta à transação
     await this.gerenciadorTransacoes.adicionarRespostaTransacao(transacao.id, resposta);
     
@@ -859,9 +856,6 @@ async verificarMencaoBotNaMensagem(msg) {
       
       // Processar o áudio com a IA
       const resultado = await this.gerenciadorAI.processarAudio(audioData, hashAudio, config);
-      
-      // Log no formato solicitado
-      this.registrador.info(`\nMensagem de ${remetente.name}: [Áudio]\nResposta: ${resultado}`);
       
       // Adicionar resposta à transação
       await this.gerenciadorTransacoes.adicionarRespostaTransacao(transacao.id, resultado);
