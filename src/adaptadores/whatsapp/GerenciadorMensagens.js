@@ -1174,7 +1174,7 @@ if (ehGrupo) {
 const mensagemOriginalTexto = mensagemOriginal.body || "[Mídia sem texto]";
 
 // Log no formato solicitado
-this.registrador.info(`${prefixoLog}: ${mensagemOriginalTexto}\nResposta: ${textoReduzido}`);
+this.registrador.debug(`${prefixoLog}: ${mensagemOriginalTexto}\nResposta: ${textoReduzido}`);
 
 // Enviar a mensagem usando o método atualizado do ClienteWhatsApp
 const chatId = chat.id._serialized;
