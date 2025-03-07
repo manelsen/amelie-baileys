@@ -125,134 +125,145 @@ class MonitorSaude {
     this.registrador.info('Verificação de conexão iniciada');
   }
 
-  /**
-   * Verifica se o cliente do WhatsApp está realmente conectado
-   * @returns {Promise<boolean>} Verdadeiro se o cliente estiver conectado
-   */
-  async verificarConexaoAtiva() {
-    try {
-      // Verificação básica da existência do cliente
-      if (!this.clienteWhatsApp || !this.clienteWhatsApp.cliente || !this.clienteWhatsApp.cliente.info) {
-        return false;
-      }
-      
-      // Se o cliente tem um ID (wid), isso já é um bom indicador
-      const temId = Boolean(this.clienteWhatsApp.cliente.info.wid);
-      
-      // Verificação de capacidade de resposta
-      let estadoConexao = false;
-      
-      // Verificar se temos um pupPage e se podemos acessá-lo
-      if (this.clienteWhatsApp.cliente.pupPage) {
-        try {
-          // Verificar o estado de conexão interno
-          estadoConexao = await this.clienteWhatsApp.cliente.pupPage.evaluate(() => {
-            // Verificação mais flexível - qualquer um destes é um bom sinal
-            return Boolean(
-              (window.Store && window.Store.Conn) || 
-              (window.WAPI && window.WAPI.isConnected()) || 
-              (window.WWebJS && window.WWebJS.isConnected) ||
-              document.querySelector('[data-icon=":"]') !== null // Ícone de conexão online
-            );
-          }).catch(() => false);
-        } catch (erroEval) {
-          // Erro na avaliação não é conclusivo - vamos verificar outros indicadores
-          this.registrador.debug(`Erro na verificação do Puppeteer: ${erroEval.message}`);
-        }
-      }
-      
-      // Se alguma mensagem foi processada recentemente (últimos 2 minutos), consideramos como conectado
-      const mensagemRecente = this.verificarMensagensRecentes();
-
-      // Se o cliente tem ID e (estado da conexão é positivo OU teve mensagem recente), consideramos conectado
-      const estaConectado = temId && (estadoConexao || mensagemRecente);
-      
-      if (!estaConectado) {
-        this.registrador.debug(`Diagnóstico de conexão: ID=${temId}, Estado=${estadoConexao}, MensagemRecente=${mensagemRecente}`);
-      }
-      
-      return estaConectado;
-    } catch (erro) {
-      this.registrador.error(`Erro ao verificar estado da conexão: ${erro.message}`);
-      return false;
-    }
-  }
-
 /**
- * Verifica se houve mensagens processadas recentemente
- * @returns {boolean} Verdadeiro se mensagens foram processadas nos últimos minutos
+ * Verifica se o cliente do WhatsApp está realmente conectado
+ * @returns {Promise<boolean>} Verdadeiro se o cliente estiver conectado
  */
-verificarMensagensRecentes() {
+async verificarConexaoAtiva() {
   try {
-    // Verificar os logs mais recentes em busca de atividade de mensagens
-    const caminhoLog = './logs/bot.log';
-    
-    // Verificar se o arquivo existe
-    if (!fs.existsSync(caminhoLog)) {
-      this.registrador.debug(`Arquivo de log ${caminhoLog} não encontrado`);
+    // Verificação básica da existência do cliente
+    if (!this.clienteWhatsApp || !this.clienteWhatsApp.cliente || !this.clienteWhatsApp.cliente.info) {
       return false;
     }
     
-    // Ler apenas as últimas linhas do arquivo para não sobrecarregar a memória
-    let conteudoLog;
-    try {
-      // Ler apenas os últimos 50KB do arquivo
-      const stats = fs.statSync(caminhoLog);
-      const tamanhoLeitura = Math.min(stats.size, 50 * 1024); // 50KB máximo
-      const buffer = Buffer.alloc(tamanhoLeitura);
-      
-      const fd = fs.openSync(caminhoLog, 'r');
-      fs.readSync(fd, buffer, 0, tamanhoLeitura, stats.size - tamanhoLeitura);
-      fs.closeSync(fd);
-      
-      conteudoLog = buffer.toString();
-    } catch (erroLeitura) {
-      this.registrador.error(`Erro ao ler arquivo de log: ${erroLeitura.message}`);
-      return false;
-    }
+    // Se o cliente tem um ID (wid), isso já é um bom indicador
+    const temId = Boolean(this.clienteWhatsApp.cliente.info.wid);
     
-    const linhasRecentes = conteudoLog.split('\n').slice(-100); // Últimas 100 linhas
+    // Verificação de capacidade de resposta via Puppeteer
+    let estadoConexaoPuppeteer = false;
     
-    // Data atual
-    const agora = new Date();
-    const doisMinutosAtras = new Date(agora.getTime() - 2 * 60 * 1000);
-    
-    // Padrões que indicam atividade real de mensagens
-    const padroesAtividade = [
-      'Mensagem de ',
-      'Resposta:',
-      'processando mídia'
-    ];
-    
-    // Procurar nas linhas recentes por atividade dentro da janela de tempo
-    for (const linha of linhasRecentes) {
-      // Verificar se é uma linha de atividade
-      if (!padroesAtividade.some(padrao => linha.includes(padrao))) continue;
-      
-      // Extrair timestamp
-      const timestampMatch = linha.match(/\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}:\d{2}/);
-      if (!timestampMatch) continue;
-      
+    // Verificar se temos um pupPage e se podemos acessá-lo
+    if (this.clienteWhatsApp.cliente.pupPage) {
       try {
-        // Converter para data
-        const dataLinha = new Date(timestampMatch[0]);
-        
-        // Se a linha é recente, consideramos como ativo
-        if (dataLinha >= doisMinutosAtras) {
-          return true;
-        }
-      } catch (erroData) {
-        this.registrador.debug(`Erro ao processar data na linha: ${erroData.message}`);
-        // Continuar para próxima linha
+        // Verificar o estado de conexão interno
+        estadoConexaoPuppeteer = await this.clienteWhatsApp.cliente.pupPage.evaluate(() => {
+          // Verificação mais flexível - qualquer um destes é um bom sinal
+          return Boolean(
+            (window.Store && window.Store.Conn) || 
+            (window.WAPI && window.WAPI.isConnected()) || 
+            (window.WWebJS && window.WWebJS.isConnected) ||
+            document.querySelector('[data-icon=":"]') !== null // Ícone de conexão online
+          );
+        }).catch(() => false);
+      } catch (erroEval) {
+        this.registrador.debug(`Erro na verificação do Puppeteer: ${erroEval.message}`);
       }
     }
     
-    return false;
+    // Se alguma mensagem foi processada recentemente, consideramos como conectado
+    const mensagemRecente = this.verificarMensagensRecentes();
+    
+    // Verificar se temos envios recentes bem-sucedidos (últimos 3 minutos)
+    const envioRecente = (this.clienteWhatsApp.ultimoEnvio && 
+                          (Date.now() - this.clienteWhatsApp.ultimoEnvio < 3 * 60 * 1000));
+    
+    // Novas métricas de saúde combinadas
+    const sinaisPositivos = [
+      temId,              // Tem identificação no WhatsApp
+      estadoConexaoPuppeteer, // Puppeteer indica conectado
+      mensagemRecente,    // Processou mensagens recentemente
+      envioRecente        // Enviou mensagens recentemente
+    ].filter(Boolean).length;
+    
+    // Se temos pelo menos 2 sinais positivos, consideramos conectado
+    // Isso torna a detecção mais resistente a falsos negativos
+    const estaConectado = sinaisPositivos >= 2;
+    
+    if (!estaConectado) {
+      this.registrador.debug(`Diagnóstico de conexão: ID=${temId}, EstadoPuppeteer=${estadoConexaoPuppeteer}, MensagemRecente=${mensagemRecente}, EnvioRecente=${envioRecente}, SinaisPositivos=${sinaisPositivos}`);
+    }
+    
+    return estaConectado;
   } catch (erro) {
-    this.registrador.error(`Erro ao verificar mensagens recentes: ${erro.message}`);
+    this.registrador.error(`Erro ao verificar estado da conexão: ${erro.message}`);
     return false;
   }
 }
+  /**
+   * Verifica se houve mensagens processadas recentemente
+   * @returns {boolean} Verdadeiro se mensagens foram processadas nos últimos minutos
+   */
+  verificarMensagensRecentes() {
+    try {
+      // Verificar os logs mais recentes em busca de atividade de mensagens
+      const caminhoLog = './logs/bot.log';
+      
+      // Verificar se o arquivo existe
+      if (!fs.existsSync(caminhoLog)) {
+        this.registrador.debug(`Arquivo de log ${caminhoLog} não encontrado`);
+        return false;
+      }
+      
+      // Ler apenas as últimas linhas do arquivo para não sobrecarregar a memória
+      let conteudoLog;
+      try {
+        // Ler apenas os últimos 50KB do arquivo
+        const stats = fs.statSync(caminhoLog);
+        const tamanhoLeitura = Math.min(stats.size, 50 * 1024); // 50KB máximo
+        const buffer = Buffer.alloc(tamanhoLeitura);
+        
+        const fd = fs.openSync(caminhoLog, 'r');
+        fs.readSync(fd, buffer, 0, tamanhoLeitura, stats.size - tamanhoLeitura);
+        fs.closeSync(fd);
+        
+        conteudoLog = buffer.toString();
+      } catch (erroLeitura) {
+        this.registrador.error(`Erro ao ler arquivo de log: ${erroLeitura.message}`);
+        return false;
+      }
+      
+      const linhasRecentes = conteudoLog.split('\n').slice(-100); // Últimas 100 linhas
+      
+      // Data atual
+      const agora = new Date();
+      const doisMinutosAtras = new Date(agora.getTime() - 2 * 60 * 1000);
+      
+      // Padrões que indicam atividade real de mensagens
+      const padroesAtividade = [
+        'Mensagem de ',
+        'Resposta:',
+        'processando mídia'
+      ];
+      
+      // Procurar nas linhas recentes por atividade dentro da janela de tempo
+      for (const linha of linhasRecentes) {
+        // Verificar se é uma linha de atividade
+        if (!padroesAtividade.some(padrao => linha.includes(padrao))) continue;
+        
+        // Extrair timestamp
+        const timestampMatch = linha.match(/\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}:\d{2}/);
+        if (!timestampMatch) continue;
+        
+        try {
+          // Converter para data
+          const dataLinha = new Date(timestampMatch[0]);
+          
+          // Se a linha é recente, consideramos como ativo
+          if (dataLinha >= doisMinutosAtras) {
+            return true;
+          }
+        } catch (erroData) {
+          this.registrador.debug(`Erro ao processar data na linha: ${erroData.message}`);
+          // Continuar para próxima linha
+        }
+      }
+      
+      return false;
+    } catch (erro) {
+      this.registrador.error(`Erro ao verificar mensagens recentes: ${erro.message}`);
+      return false;
+    }
+  }
 
   /**
    * Registra um batimento cardíaco apenas se a conexão estiver ativa
@@ -262,11 +273,15 @@ verificarMensagensRecentes() {
     const intervaloReal = agora - this.ultimoBatimento;
     this.ultimoBatimento = agora;
     
+    // Se houver atividade recente de mensagens, consideramos o sistema ativo
+    // mesmo que o WhatsApp não pareça estar conectado pelos métodos tradicionais
+    const temAtividadeRecente = this.verificarMensagensRecentes();
+    
     // Verificar se a conexão com o WhatsApp está ativa
     const conexaoAtiva = await this.verificarConexaoAtiva();
     
-    // Se a conexão não estiver ativa, registrar o problema e não emitir batimento
-    if (!conexaoAtiva) {
+    // Se a conexão não estiver ativa e não há atividade recente, registrar o problema e não emitir batimento
+    if (!conexaoAtiva && !temAtividadeRecente) {
       this.registrador.warn('❌ Conexão WhatsApp inativa - batimento não emitido');
       return;
     }
@@ -355,27 +370,76 @@ verificarMensagensRecentes() {
   }
 
   /**
-   * Verifica a conexão e tenta reconectar se necessário
-   */
+  * Verifica a conexão e tenta reconectar se necessário
+  */
   async verificarConexao() {
     try {
       const conexaoAtiva = await this.verificarConexaoAtiva();
+      const ultimoBatimentoAntigo = this.ultimoBatimento < Date.now() - (2 * 60 * 1000); // 2 minutos sem batimento
       
-      if (!conexaoAtiva) {
+      if (!conexaoAtiva || ultimoBatimentoAntigo) {
         this.falhasConsecutivas++;
-        this.registrador.warn(`Conexão inativa detectada (falha ${this.falhasConsecutivas}/${this.opcoes.limiteReconexoes})`);
+        let motivo = !conexaoAtiva ? 'Conexão inativa detectada' : 'Batimentos ausentes por mais de 2 minutos';
+        this.registrador.warn(`${motivo} (falha ${this.falhasConsecutivas}/${this.opcoes.limiteReconexoes})`);
         
-        if (this.falhasConsecutivas >= this.opcoes.limiteReconexoes) {
-          this.registrador.error(`Muitas falhas consecutivas. Iniciando reinício completo do cliente.`);
-          await this.clienteWhatsApp.reiniciarCompleto();
-          this.falhasConsecutivas = 0;
-        } else {
-          this.registrador.warn(`Tentando reconexão simples...`);
+        // Estratégia de recuperação em camadas
+        if (this.falhasConsecutivas === 1) {
+          // Nível 1: Tentar reconexão simples
+          this.registrador.warn(`Tentando reconexão leve...`);
           const reconectou = await this.clienteWhatsApp.reconectar();
           
           if (reconectou) {
-            this.registrador.info(`Reconexão bem-sucedida!`);
+            this.registrador.info(`Reconexão leve bem-sucedida!`);
             this.falhasConsecutivas = 0;
+            this.ultimoBatimento = Date.now(); // Atualizar timestamp do batimento
+            return;
+          }
+        } else if (this.falhasConsecutivas === 2) {
+          // Nível 2: Tentar limpar recursos e reconectar
+          this.registrador.warn(`Tentando reconexão com limpeza de recursos...`);
+          
+          // Sugerir coleta de lixo se disponível
+          if (global.gc) {
+            this.registrador.info('Solicitando coleta de lixo...');
+            global.gc();
+          }
+          
+          const reconectou = await this.clienteWhatsApp.reconectar();
+          if (reconectou) {
+            this.registrador.info(`Reconexão com limpeza bem-sucedida!`);
+            this.falhasConsecutivas = 0;
+            this.ultimoBatimento = Date.now();
+            return;
+          }
+        } else if (this.falhasConsecutivas >= this.opcoes.limiteReconexoes) {
+          // Nível 3: Reinício completo do cliente (não do processo)
+          this.registrador.error(`Muitas falhas consecutivas. Iniciando reinício completo do cliente.`);
+          
+          try {
+            // Reiniciar apenas o cliente WhatsApp, não o processo inteiro
+            await this.clienteWhatsApp.reiniciarCompleto();
+            
+            // Atualizar timestamp para dar tempo ao sistema de se reestabelecer
+            this.ultimoBatimento = Date.now();
+            this.falhasConsecutivas = 0;
+            
+            this.registrador.info(`Reinício do cliente WhatsApp concluído com sucesso!`);
+            return;
+          } catch (erroReinicio) {
+            this.registrador.error(`Falha no reinício do cliente: ${erroReinicio.message}`);
+            
+            // Aqui poderíamos implementar uma estratégia final, como sinalizar 
+            // para um processo supervisor externo, mas sem matar o processo
+          }
+        } else {
+          // Tentativas intermediárias
+          this.registrador.warn(`Tentando reconexão padrão...`);
+          const reconectou = await this.clienteWhatsApp.reconectar();
+          
+          if (reconectou) {
+            this.registrador.info(`Reconexão padrão bem-sucedida!`);
+            this.falhasConsecutivas = 0;
+            this.ultimoBatimento = Date.now();
           }
         }
       } else {
@@ -389,6 +453,138 @@ verificarMensagensRecentes() {
       this.registrador.error(`Erro na verificação de conexão: ${erro.message}`);
     }
   }
+  /**
+ * Inicializa o monitor de saúde com watchdog interno
+ */
+iniciar() {
+  this.iniciarMonitorBatimento();
+  this.iniciarMonitorMemoria();
+  this.iniciarVerificacaoConexao();
+  this.iniciarWatchdogInterno(); // Nova função!
+  this.registrador.info('Monitores de saúde iniciados');
+}
+
+/**
+ * Inicia um watchdog interno que detecta paralisação total do sistema
+ */
+iniciarWatchdogInterno() {
+  // Último momento em que o sistema fez qualquer operação
+  this.ultimaAtividadeSistema = Date.now();
+  
+  // Criar arquivo de marcação de tempo
+  fs.writeFileSync('./temp/ultimo_check.txt', Date.now().toString(), 'utf8');
+  
+  // Watchdog primário (dentro do processo)
+  this.intervalos.watchdogInterno = setInterval(() => {
+    // Atualizar marca de último check
+    this.ultimaAtividadeSistema = Date.now();
+    fs.writeFileSync('./temp/ultimo_check.txt', Date.now().toString(), 'utf8');
+  }, 30000); // A cada 30 segundos
+  
+  // Watchdog secundário (verificação cruzada)
+  this.intervalos.watchdogSecundario = setInterval(() => {
+    try {
+      // Ler a última marca de tempo
+      const ultimoCheck = fs.readFileSync('./temp/ultimo_check.txt', 'utf8');
+      const ultimoCheckTimestamp = parseInt(ultimoCheck);
+      
+      // Se o arquivo não foi atualizado há mais de 2 minutos, temos um travamento grave
+      if (Date.now() - ultimoCheckTimestamp > 2 * 60 * 1000) {
+        this.registrador.error(`⚠️ ALERTA CRÍTICO: Sistema paralisado detectado! Última atividade há ${Math.floor((Date.now() - ultimoCheckTimestamp)/1000)}s`);
+        
+        // Forçar reinício do cliente WhatsApp de forma agressiva
+        this.recuperacaoEmergencia();
+      }
+    } catch (erro) {
+      this.registrador.error(`Erro no watchdog secundário: ${erro.message}`);
+    }
+  }, 60000); // A cada 1 minuto
+  
+  this.registrador.info('Watchdog interno iniciado para detectar paralisação total');
+}
+
+/**
+ * Procedimento de recuperação de emergência para casos críticos
+ */
+async recuperacaoEmergencia() {
+  this.registrador.error('🚨 INICIANDO PROCEDIMENTO DE RECUPERAÇÃO DE EMERGÊNCIA 🚨');
+  
+  try {
+    // 1. Forçar liberação de memória
+    if (global.gc) {
+      this.registrador.info('Forçando coleta de lixo...');
+      global.gc();
+    }
+    
+    // 2. Salvar estado crítico para análise posterior
+    this.salvarEstadoCritico();
+    
+    // 3. Tentar matar e reiniciar o cliente diretamente
+    if (this.clienteWhatsApp.cliente && this.clienteWhatsApp.cliente.pupBrowser) {
+      try {
+        await this.clienteWhatsApp.cliente.pupBrowser.close().catch(() => {});
+      } catch (err) {
+        this.registrador.error(`Não foi possível fechar o navegador: ${err.message}`);
+      }
+    }
+    
+    // 4. Reiniciar completamente o cliente
+    this.registrador.info('Forçando reinício completo do cliente...');
+    await this.clienteWhatsApp.reiniciarCompleto();
+    
+    // 5. Atualizar marcadores de tempo
+    this.ultimoBatimento = Date.now();
+    this.ultimaAtividadeSistema = Date.now();
+    this.falhasConsecutivas = 0;
+    
+    this.registrador.info('✅ Recuperação de emergência concluída');
+  } catch (erro) {
+    this.registrador.error(`Falha na recuperação de emergência: ${erro.message}`);
+    
+    // Se tudo falhar, tentar uma última medida desesperada
+    this.registrador.error('Tentando medida de último recurso...');
+    
+    // Reiniciar componentes críticos com novos objetos
+    try {
+      this.clienteWhatsApp.inicializarCliente();
+      this.registrador.info('Cliente reinicializado de forma bruta');
+    } catch (erroFinal) {
+      this.registrador.error(`Falha na medida de último recurso: ${erroFinal.message}`);
+    }
+  }
+}
+
+/**
+ * Salva informações sobre o estado crítico para diagnóstico
+ */
+salvarEstadoCritico() {
+  try {
+    const diretorioDiagnostico = './diagnosticos';
+    if (!fs.existsSync(diretorioDiagnostico)) {
+      fs.mkdirSync(diretorioDiagnostico, { recursive: true });
+    }
+    
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const arquivoDiagnostico = path.join(diretorioDiagnostico, `travamento_${timestamp}.json`);
+    
+    // Coletar métricas do sistema
+    const diagnostico = {
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      memoria: process.memoryUsage(),
+      ultimoBatimento: new Date(this.ultimoBatimento).toISOString(),
+      ultimaAtividadeSistema: new Date(this.ultimaAtividadeSistema).toISOString(),
+      contadorBatimentos: this.contadorBatimentos,
+      falhasConsecutivas: this.falhasConsecutivas
+    };
+    
+    fs.writeFileSync(arquivoDiagnostico, JSON.stringify(diagnostico, null, 2), 'utf8');
+    this.registrador.info(`Informações de diagnóstico salvas em ${arquivoDiagnostico}`);
+  } catch (erro) {
+    this.registrador.error(`Erro ao salvar diagnóstico: ${erro.message}`);
+  }
+}
+
 }
 
 module.exports = MonitorSaude;

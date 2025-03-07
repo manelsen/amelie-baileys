@@ -538,7 +538,7 @@ Comandos:
 .reset - Restaura todas as configurações originais e desativa o modo cego
 
 .ajuda - Mostra esta mensagem de ajuda
-        
+
         Você não tem outros comandos e não aceita comandos sem o ponto, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego.         
         Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima.         
         Sua criadora e idealizadora foi a Belle Utsch.         
@@ -605,6 +605,9 @@ Comandos:
     // Remover prefixos comuns de assistente
     texto = texto.replace(/^(?:amélie:[\s]*)+/i, '');
     texto = texto.replace(/^(?:amelie:[\s]*)+/i, '');
+
+    // Remover asteriscos de formatação Markdown
+    texto = texto.replace(/\*+/g, '');
     
     // Normalizar quebras de linha
     texto = texto.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n{3,}/g, '\n\n');
