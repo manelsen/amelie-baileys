@@ -11,5 +11,8 @@ logs/*
 *.mp4
 backup*
 auth_info_multi/
-package-lock.json
 blocked_videos
+transacoesMensagens.js
+tx_*
+inactive_restart_*
+temp/*
