@@ -3,7 +3,7 @@
  * 
  * Este módulo encapsula toda a lógica de conexão, autenticação e sessão do WhatsApp,
  * incluindo reconexões, verificação de estado e envio de mensagens.
- */
+ */ 
 
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
