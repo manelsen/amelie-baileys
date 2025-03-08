@@ -125,6 +125,35 @@ class GerenciadorAI extends IAPort {
     }
   }
 
+   /**
+   * Obtém configurações para processamento de imagem/vídeo diretamente do banco
+   * @param {string} chatId - ID do chat específico para obter a configuração
+   * @param {string} tipo - Tipo de mídia ('imagem' ou 'video')
+   * @returns {Promise<Object>} Configurações do processamento
+   */
+  async obterConfigDireta(chatId, tipo = 'imagem') {
+    try {
+      // Importar ConfigManager
+      const caminhoConfig = path.resolve(__dirname, '../../config/ConfigManager');
+      const ConfigManager = require(caminhoConfig);
+      
+      // Criar instância temporária para acessar o banco
+      const gerenciadorConfig = new ConfigManager(this.registrador, './db');
+      
+      // Obter configuração do banco
+      const config = await gerenciadorConfig.obterConfig(chatId);
+      
+      // Log para depuração
+      this.registrador.debug(`GerenciadorAI - Config direta para ${chatId}: modo=${config.modoDescricao || 'não definido'}`);
+      
+      return config;
+    } catch (erro) {
+      this.registrador.error(`Erro ao obter configuração direta: ${erro.message}`);
+      // Retornar configuração padrão em caso de erro
+      return { modoDescricao: 'curto' };
+    }
+  }
+
   /**
    * Obtém configurações para processamento de imagem
    * @param {string} chatId - ID do chat

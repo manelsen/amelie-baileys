@@ -67,7 +67,6 @@ Estrutura da Resposta: Para cada imagem, forneça uma única descrição objetiv
       
 [Audiodescrição]
 (Uma descrição concisa de no máximo 200 caracteres - seja rigoroso neste limite)
-[Fim da Audiodescrição]
       
 Diretrizes:
 - Comece diretamente com a descrição, sem introduções como "A imagem mostra..." 
@@ -98,7 +97,6 @@ Estrutura da Resposta: Para este vídeo, sua resposta deve seguir este formato:
       
 [Audiodescrição de Vídeo]
 (Uma descrição objetiva e concisa do vídeo em no máximo 200 caracteres - seja rigoroso neste limite)
-[Fim da Audiodescrição]
       
 Diretrizes para a Descrição de Vídeo:
 - Comece diretamente com a descrição, sem introduções como "O vídeo mostra..."

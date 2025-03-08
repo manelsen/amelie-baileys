@@ -184,6 +184,34 @@ constructor(registrador, gerenciadorAI, clienteWhatsApp, opcoes = {}) {
   }
 
   /**
+ * Obtém configurações para processamento de vídeo diretamente do banco de dados
+ * @param {string} chatId - ID do chat específico para obter a configuração
+ * @returns {Promise<Object>} Configurações do processamento
+ */
+async obterConfigDireta(chatId) {
+  try {
+    // Importar ConfigManager
+    const caminhoConfig = path.resolve(__dirname, '../../config/ConfigManager');
+    const ConfigManager = require(caminhoConfig);
+    
+    // Criar instância temporária para acessar o banco
+    const gerenciadorConfig = new ConfigManager(this.registrador, './db');
+    
+    // Obter configuração do banco para o chat específico
+    const config = await gerenciadorConfig.obterConfig(chatId);
+    
+    // Log para depuração
+    this.registrador.debug(`FilaProcessador - Config direta para ${chatId}: modo=${config.modoDescricao || 'não definido'}`);
+    
+    return config;
+  } catch (erro) {
+    this.registrador.error(`Erro ao obter configuração direta: ${erro.message}`);
+    // Retornar configuração padrão em caso de erro
+    return { modoDescricao: 'curto' };
+  }
+}
+
+  /**
    * Configura os processadores das filas
    */
   configurarProcessadores() {
@@ -476,27 +504,37 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
 });
     
     // 3. Processador para análise do vídeo
+/**
+ * Processador para análise do vídeo
+ * Obtém a configuração diretamente do banco de dados para garantir
+ * que as preferências específicas do chat sejam respeitadas
+ */
 this.videoAnalysisQueue.process('analyze-video', 3, async (job) => {
   const { 
     fileName, tempFilename, chatId, messageId, mimeType, userPrompt, senderNumber, 
-    transacaoId, fileState, fileUri, fileMimeType, remetenteName, modoDescricao = 'curto' // Adicionado com padrão 'curto'
+    transacaoId, fileState, fileUri, fileMimeType, remetenteName
   } = job.data;
   
   try {
-    this.registrador.debug(`[Etapa 3] Iniciando análise do vídeo: ${fileName} (Job ${job.id}) no modo ${modoDescricao}`);
+    this.registrador.debug(`[Etapa 3] Iniciando análise do vídeo: ${fileName} (Job ${job.id})`);
     
-    // Obter configurações do usuário
+    // Obter configuração diretamente do banco de dados para este chat específico
+    const configDireta = await this.obterConfigDireta(chatId);
+    const modoDescricao = configDireta.modoDescricao || 'curto';
+    
+    this.registrador.debug(`Modo de descrição obtido diretamente do banco: ${modoDescricao} para chat ${chatId}`);
+    
+    // Obter configurações gerais de processamento
     const config = await this.obterConfigProcessamento(chatId);
     
     // Obter modelo
     const modelo = this.gerenciadorAI.obterOuCriarModelo(config);
     
-    // Registrar o modo de descrição
-    this.registrador.debug(`Usando modo de descrição: ${modoDescricao} para vídeo`);
-    
-    // Preparar o prompt adequado com base no modo
+    // Preparar o prompt adequado com base no modo obtido diretamente do banco
     const { obterPromptVideo, obterPromptVideoCurto } = require('../../config/InstrucoesSistema');
     const promptBase = modoDescricao === 'longo' ? obterPromptVideo() : obterPromptVideoCurto();
+    
+    this.registrador.debug(`Usando prompt base ${modoDescricao.toUpperCase()} para vídeo`);
     
     // Preparar partes de conteúdo
     const partesConteudo = [
@@ -525,7 +563,7 @@ this.videoAnalysisQueue.process('analyze-video', 3, async (job) => {
     }
     
     // Log do processamento concluído
-    this.registrador.debug(`[Etapa 3] Análise de vídeo concluída com sucesso para ${remetenteName || senderNumber}`);
+    this.registrador.debug(`[Etapa 3] Análise de vídeo concluída com sucesso para ${remetenteName || senderNumber} usando modo ${modoDescricao}`);
     
     // Enviar resposta via callback ou diretamente
     if (this.resultCallback) {
