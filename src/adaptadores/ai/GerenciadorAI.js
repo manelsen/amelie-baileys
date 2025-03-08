@@ -109,7 +109,7 @@ class GerenciadorAI extends IAPort {
       const ConfigManager = require(caminhoConfig);
       
       // Criar instância temporária para acessar o banco
-      const gerenciadorConfig = new ConfigManager(this.registrador, './db');
+      const gerenciadorConfig = new ConfigManager(this.registrador, path.join(process.cwd(), 'db'));
       
       // Obter configuração do banco
       const config = await gerenciadorConfig.obterConfig(chatId);
@@ -138,7 +138,7 @@ class GerenciadorAI extends IAPort {
       const ConfigManager = require(caminhoConfig);
       
       // Criar instância temporária para acessar o banco
-      const gerenciadorConfig = new ConfigManager(this.registrador, './db');
+      const gerenciadorConfig = new ConfigManager(this.registrador, path.join(process.cwd(), 'db'));
       
       // Obter configuração do banco
       const config = await gerenciadorConfig.obterConfig(chatId);

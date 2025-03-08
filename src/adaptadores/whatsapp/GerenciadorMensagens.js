@@ -1067,7 +1067,7 @@ Crie uma descrição organizada e acessível.`;
           timeout: 300000 // 5 minutos
         });
         
-        this.registrador.info(`🚀 Vídeo de ${remetente.name} adicionado à fila com sucesso: ${arquivoTemporario} (Job ${trabalhoId})`);
+        this.registrador.debug(`🚀 Vídeo de ${remetente.name} adicionado à fila com sucesso: ${arquivoTemporario} (Job ${trabalhoId})`);
         return true;
         
       } catch (erroProcessamento) {

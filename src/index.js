@@ -2,7 +2,6 @@
  * Amélie - Assistente Virtual de IA para WhatsApp
  * 
  * Arquivo principal que inicializa e integra os módulos do sistema.
- * Esta versão utiliza a arquitetura hexagonal para melhor organização.
  * 
  * @author Belle Utsch
  * @version 2.0.0
@@ -145,7 +144,7 @@ Esses são meus comandos disponíveis para configuração:
 logger.info('🤖 Iniciando Amélie - Assistente Virtual de IA para WhatsApp');
 
 // 1. Inicializar gerenciador de configurações
-const configManager = new ConfigManager(logger, './db');
+const configManager = new ConfigManager(logger, path.join(process.cwd(), 'db'));
 logger.info('✅ Gerenciador de configurações inicializado');
 
 // 2. Inicializar o cliente WhatsApp
@@ -165,7 +164,7 @@ const gerenciadorAI = new GerenciadorAI(logger, API_KEY);
 logger.info('✅ Gerenciador de IA inicializado');
 
 // 5. Inicializar o gerenciador de transações
-const gerenciadorTransacoes = new GerenciadorTransacoes(logger, './db');
+const gerenciadorTransacoes = new GerenciadorTransacoes(logger, path.join(process.cwd(), 'db'));
 logger.info('✅ Gerenciador de transações inicializado');
 
 // 6. Inicializar o processador de filas
