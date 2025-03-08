@@ -191,7 +191,7 @@ class FilaProcessador {
       const { tempFilename, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId, remetenteName } = job.data;
       
       try {
-        this.registrador.info(`[Etapa 1] Iniciando upload de vídeo: ${tempFilename} (Job ${job.id})`);
+        this.registrador.debug(`[Etapa 1] Iniciando upload de vídeo: ${tempFilename} (Job ${job.id})`);
         
         // Verificar se o arquivo existe
         if (!fs.existsSync(tempFilename)) {
@@ -204,7 +204,7 @@ class FilaProcessador {
           displayName: "Vídeo Enviado"
         });
         
-        this.registrador.info(`[Etapa 1] Upload concluído, nome do arquivo: ${respostaUpload.file.name}`);
+        this.registrador.debug(`[Etapa 1] Upload concluído, nome do arquivo: ${respostaUpload.file.name}`);
         
         // Adicionar à fila de verificação de processamento
         await this.videoProcessingCheckQueue.add('check-processing', {
@@ -290,7 +290,7 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
   const { fileName, tempFilename, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId, uploadTimestamp, remetenteName, tentativas = 0 } = job.data;
   
   try {
-    this.registrador.info(`[Etapa 2] Verificando processamento do vídeo: ${fileName} (Job ${job.id}), tentativa ${tentativas + 1}`);
+    this.registrador.debug(`[Etapa 2] Verificando processamento do vídeo: ${fileName} (Job ${job.id}), tentativa ${tentativas + 1}`);
     
     // Se já estamos na tentativa 10, enviar feedback ao usuário
     if (tentativas === 10) {
@@ -349,7 +349,7 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
     if (arquivo.state === "PROCESSING") {
       // Se ainda está processando e não excedeu o limite de tentativas, reagendar
       if (tentativas < maxTentativas) {
-        this.registrador.info(`[Etapa 2] Vídeo ainda em processamento, reagendando verificação... (tentativa ${tentativas + 1})`);
+        this.registrador.debug(`[Etapa 2] Vídeo ainda em processamento, reagendando verificação... (tentativa ${tentativas + 1})`);
         
         // Enviar mensagem de progresso apenas se necessário
         if (enviarAtualizacao) {
@@ -394,7 +394,7 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
       throw new Error(`Estado inesperado do arquivo: ${arquivo.state}`);
     }
     
-    this.registrador.info(`[Etapa 2] Vídeo processado com sucesso, estado: ${arquivo.state}`);
+    this.registrador.debug(`[Etapa 2] Vídeo processado com sucesso, estado: ${arquivo.state}`);
     
     // Adicionar à fila de análise
     await this.videoAnalysisQueue.add('analyze-video', {
@@ -518,7 +518,7 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
       } = job.data;
       
       try {
-        this.registrador.info(`[Etapa 3] Iniciando análise do vídeo: ${fileName} (Job ${job.id})`);
+        this.registrador.debug(`[Etapa 3] Iniciando análise do vídeo: ${fileName} (Job ${job.id})`);
         
         // Obter configurações do usuário
         const config = await this.obterConfigProcessamento(chatId);
@@ -553,7 +553,7 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
         }
         
         // Log do processamento concluído
-        this.registrador.info(`[Etapa 3] Análise de vídeo concluída com sucesso para ${remetenteName || senderNumber}`);
+        this.registrador.debug(`[Etapa 3] Análise de vídeo concluída com sucesso para ${remetenteName || senderNumber}`);
         
         // Enviar resposta via callback ou diretamente
         if (this.resultCallback) {
@@ -565,10 +565,10 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
             transacaoId,
             remetenteName
           });
-          this.registrador.info(`[Etapa 3] Resposta de vídeo enviada para callback - Transação ${transacaoId}`);
+          this.registrador.debug(`[Etapa 3] Resposta de vídeo enviada para callback - Transação ${transacaoId}`);
         } else if (this.opcoes.enviarRespostaDireta) {
           await this.clienteWhatsApp.enviarMensagem(senderNumber, resposta);
-          this.registrador.info(`[Etapa 3] Resposta de vídeo enviada diretamente para ${senderNumber}`);
+          this.registrador.debug(`[Etapa 3] Resposta de vídeo enviada diretamente para ${senderNumber}`);
         }
         
         // Limpar o arquivo temporário
