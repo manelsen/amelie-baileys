@@ -223,48 +223,40 @@ class FilaProcessadorImagem {
     });
     
     // 2. Processador para análise da imagem
-this.imageAnalysisQueue.process('analyze-image', 5, async (job) => {
-  const { 
-    imageData, chatId, messageId, mimeType, userPrompt, senderNumber, 
-    transacaoId, uploadTimestamp, remetenteName 
-  } = job.data;
-  
-  try {
-    this.registrador.debug(`[Etapa 2] Iniciando análise da imagem (Job ${job.id})`);
-    
-    // Se a análise está demorando, notificar via callback
-    if (Date.now() - uploadTimestamp > 10000 && this.respostaCallback) {
-      this.respostaCallback({
-        resposta: "Estou analisando sua imagem... isso pode levar alguns segundos.",
-        chatId,
-        messageId,
-        senderNumber,
-        transacaoId,
-        isProgress: true
-      });
-    }
-    
-    // Obter configurações do usuário
-    const config = await this.obterConfigProcessamento(chatId);
-    
-    // Usar o gerenciadorAI para processar a imagem
-    const parteImagem = {
-      inlineData: {
-        data: imageData.data,
-        mimeType: imageData.mimetype
-      }
-    };
-    
-    // Obter modo de audiodescrição das configurações
-    const modoAudiodescricao = config.modoAudiodescricao || 'longo';
-    
-    // Usar o modo correto para o prompt
-    const promptFinal = this.prepararPromptUsuario(userPrompt, modoAudiodescricao);
-    
-    const partesConteudo = [
-      parteImagem,
-      { text: promptFinal }
-    ];
+    this.imageAnalysisQueue.process('analyze-image', 5, async (job) => {
+      const { 
+        imageData, chatId, messageId, mimeType, userPrompt, senderNumber, 
+        transacaoId, uploadTimestamp, remetenteName, modoDescricao = 'curto' // Adicionado com padrão 'curto'
+      } = job.data;
+      
+      try {
+        this.registrador.debug(`[Etapa 2] Iniciando análise da imagem (Job ${job.id}) no modo ${modoDescricao}`);
+        
+        if (Date.now() - uploadTimestamp > 10000) {
+          this.registrador.debug(`Job ${job.id} está demorando mais que o esperado (${Math.round((Date.now() - uploadTimestamp)/1000)}s)`);
+        }
+        
+        // Obter configurações do usuário
+        const config = await this.obterConfigProcessamento(chatId);
+        
+        // Usar o gerenciadorAI para processar a imagem
+        const parteImagem = {
+          inlineData: {
+            data: imageData.data,
+            mimeType: imageData.mimetype
+          }
+        };
+        
+        // IMPORTANTE: Usar o modo passado no job
+        const promptFinal = this.prepararPromptUsuario(userPrompt, modoDescricao);
+        
+        // Registrar o prompt que será usado
+        this.registrador.debug(`Usando modo de descrição: ${modoDescricao} para imagem`);
+        
+        const partesConteudo = [
+          parteImagem,
+          { text: promptFinal }
+        ];
         
         // Obter modelo
         const modelo = this.gerenciadorAI.obterOuCriarModelo(config);
@@ -418,25 +410,32 @@ this.imageAnalysisQueue.process('analyze-image', 5, async (job) => {
   }
 
   /**
-   * Prepara o prompt do usuário, adicionando orientações se necessário
-   * @param {string} promptUsuario - Prompt original do usuário
-   * @param {string} modoDescricao - Modo de descrição (longo ou curto)
-   * @returns {string} Prompt processado
-   */
-  prepararPromptUsuario(promptUsuario, modoDescricao = 'longo') {
-    // Se não tiver prompt do usuário, usar o padrão para descrição
-    if (!promptUsuario || promptUsuario.trim() === '') {
-      const { obterPromptImagem, obterPromptImagemCurto } = require('../../config/InstrucoesSistema');
-      
-      if (modoDescricao === 'curto') {
-        return obterPromptImagemCurto();
-      } else {
-        return obterPromptImagem();
-      }
-    }
+ * Prepara o prompt do usuário, adicionando orientações se necessário
+ * @param {string} promptUsuario - Prompt original do usuário
+ * @param {string} modoDescricao - Modo de descrição (longo ou curto)
+ * @returns {string} Prompt processado
+ */
+prepararPromptUsuario(promptUsuario, modoDescricao = 'curto') {
+  // Log para depuração
+  this.registrador.debug(`Preparando prompt com modo: ${modoDescricao}`);
+  
+  // Se não tiver prompt do usuário, usar o padrão para descrição
+  if (!promptUsuario || promptUsuario.trim() === '') {
+    const { obterPromptImagem, obterPromptImagemCurto } = require('../../config/InstrucoesSistema');
     
-    return promptUsuario;
+    if (modoDescricao === 'longo') {
+      const promptLongo = obterPromptImagem();
+      this.registrador.debug('Usando prompt LONGO para imagem');
+      return promptLongo;
+    } else {
+      const promptCurto = obterPromptImagemCurto();
+      this.registrador.debug('Usando prompt CURTO para imagem');
+      return promptCurto;
+    }
   }
+  
+  return promptUsuario;
+}
 
   /**
    * Configura eventos para uma fila

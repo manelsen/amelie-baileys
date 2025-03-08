@@ -31,16 +31,17 @@ class ConfigManager {
     this.groupsDb = new Datastore({ filename: path.join(this.diretorioDB, 'groups.db'), autoload: true });
     this.usersDb = new Datastore({ filename: path.join(this.diretorioDB, 'users.db'), autoload: true });
     
-    // Configuração padrão para a assistente
-    this.configPadrao = {
-      temperature: 0.9,
-      topK: 1,
-      topP: 0.95,
-      maxOutputTokens: 1024,
-      mediaImage: true,  
-      mediaAudio: false,  
-      mediaVideo: true   
-    };
+// Configuração padrão para a assistente
+this.configPadrao = {
+  temperature: 0.9,
+  topK: 1,
+  topP: 0.95,
+  maxOutputTokens: 1024,
+  mediaImage: true,  
+  mediaAudio: false,  
+  mediaVideo: true,
+  modoDescricao: 'curto' // Adicionado com padrão 'curto'
+};
     
     this.registrador.info('Gerenciador de configurações inicializado');
   }
@@ -118,7 +119,9 @@ async resetarConfig(chatId) {
       { chatId },
       { $set: {
         ...this.configPadrao,
-        modoDescricao: 'longo', // Resetar o modo de descrição para o padrão
+        modoDescricao: 'curto', // Alterado para 'curto' como padrão
+        descricaoLonga: false,
+        descricaoCurta: true,
         activePrompt: null // Limpar prompt ativo
       }},
       { upsert: true },

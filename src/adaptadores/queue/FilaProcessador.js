@@ -17,20 +17,21 @@ const {
 
 class FilaProcessador {
   /**
-   * Cria uma instância do gerenciador de filas
-   * @param {Object} registrador - Objeto logger para registro de eventos
-   * @param {Object} gerenciadorAI - Instância do gerenciador de IA
-   * @param {Object} clienteWhatsApp - Instância do cliente WhatsApp
-   * @param {Object} opcoes - Opções de configuração
-   */
-  constructor(registrador, gerenciadorAI, clienteWhatsApp, opcoes = {}) {
-    this.registrador = registrador;
-    this.gerenciadorAI = gerenciadorAI;
-    this.clienteWhatsApp = clienteWhatsApp;
-    this.opcoes = {
-      enviarRespostaDireta: true,
-      ...opcoes
-    };
+ * Cria uma instância do gerenciador de filas
+ * @param {Object} registrador - Objeto logger para registro de eventos
+ * @param {Object} gerenciadorAI - Instância do gerenciador de IA
+ * @param {Object} clienteWhatsApp - Instância do cliente WhatsApp
+ * @param {Object} opcoes - Opções de configuração
+ */
+constructor(registrador, gerenciadorAI, clienteWhatsApp, opcoes = {}) {
+  this.registrador = registrador;
+  this.gerenciadorAI = gerenciadorAI;
+  this.clienteWhatsApp = clienteWhatsApp;
+  this.opcoes = {
+    enviarRespostaDireta: true,
+    enviarMensagensProgresso: false, // Nova opção, desabilitada por padrão
+    ...opcoes
+  };
     
     // Callback para retornar resultados ao invés de enviar diretamente
     this.resultCallback = null;
@@ -292,19 +293,9 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
   try {
     this.registrador.debug(`[Etapa 2] Verificando processamento do vídeo: ${fileName} (Job ${job.id}), tentativa ${tentativas + 1}`);
     
-    // Se já estamos na tentativa 10, enviar feedback ao usuário
+    // Se já estamos na tentativa 10, fazer log, mas não enviar feedback ao usuário
     if (tentativas === 10) {
-      if (this.resultCallback) {
-        this.resultCallback({
-          resposta: "Seu vídeo está demorando mais que o normal para ser processado. Continuarei tentando, mas pode ser que ele seja muito complexo ou longo.",
-          chatId,
-          messageId,
-          senderNumber,
-          transacaoId,
-          isProgress: true,
-          remetenteName
-        });
-      }
+      this.registrador.debug(`Job ${job.id} - tentativa 10, processamento prolongado`);
     }
     
     // Obter estado atual do arquivo - com tratamento de erro aprimorado
@@ -316,7 +307,7 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
       if (erroAcesso.message && erroAcesso.message.includes('403 Forbidden')) {
         this.registrador.warn(`Arquivo ${fileName} não está mais acessível (403 Forbidden). Abortando processamento.`);
         
-        // Notificar usuário
+        // Notificar usuário apenas sobre falha final, não sobre progresso
         if (this.resultCallback) {
           this.resultCallback({
             resposta: "Desculpe, encontrei um problema técnico ao processar seu vídeo. Parece que ele é muito complexo para meu sistema. Poderia tentar com um vídeo mais curto ou de menor resolução?",
@@ -341,45 +332,17 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
     // Reduzir o limite máximo de tentativas para falhar mais cedo
     const maxTentativas = 10; // antes era 12
     
-    // Controle para mensagens de progresso - enviar uma a cada 20 segundos
-    const ultimaMensagemTimestamp = job.data.ultimaMensagemTimestamp || 0;
-    const enviarAtualizacao = Date.now() - ultimaMensagemTimestamp > 20000;
-    
     // Verificar o estado do arquivo
     if (arquivo.state === "PROCESSING") {
       // Se ainda está processando e não excedeu o limite de tentativas, reagendar
       if (tentativas < maxTentativas) {
         this.registrador.debug(`[Etapa 2] Vídeo ainda em processamento, reagendando verificação... (tentativa ${tentativas + 1})`);
         
-        // Enviar mensagem de progresso apenas se necessário
-        if (enviarAtualizacao) {
-          const mensagemProgresso = "Seu vídeo está sendo processado... isso pode levar alguns minutos para vídeos longos ou complexos.";
-          
-          if (this.resultCallback) {
-            this.resultCallback({
-              resposta: mensagemProgresso,
-              chatId,
-              messageId,
-              senderNumber,
-              transacaoId,
-              isProgress: true,
-              remetenteName
-            });
-          }
-          
-          // Reagendar esta verificação após 15 segundos (aumentamos para dar mais tempo)
-          await this.videoProcessingCheckQueue.add('check-processing', {
-            ...job.data,
-            tentativas: tentativas + 1,
-            ultimaMensagemTimestamp: Date.now()
-          }, { delay: 15000 });
-        } else {
-          // Reagendar sem enviar mensagem
-          await this.videoProcessingCheckQueue.add('check-processing', {
-            ...job.data,
-            tentativas: tentativas + 1
-          }, { delay: 15000 });
-        }
+        // Reagendar sem enviar mensagem de progresso
+        await this.videoProcessingCheckQueue.add('check-processing', {
+          ...job.data,
+          tentativas: tentativas + 1
+        }, { delay: 15000 });
         
         return { success: true, status: "PROCESSING", tentativas: tentativas + 1 };
       } else {
@@ -409,7 +372,9 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
       fileState: arquivo.state,
       fileUri: arquivo.uri,
       fileMimeType: arquivo.mimeType,
-      remetenteName
+      remetenteName,
+      // Passar o modo de descrição para a próxima etapa
+      modoDescricao: job.data.modoDescricao || 'curto'
     });
     
     return { success: true, status: arquivo.state };
@@ -514,11 +479,11 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
 this.videoAnalysisQueue.process('analyze-video', 3, async (job) => {
   const { 
     fileName, tempFilename, chatId, messageId, mimeType, userPrompt, senderNumber, 
-    transacaoId, fileState, fileUri, fileMimeType, remetenteName 
+    transacaoId, fileState, fileUri, fileMimeType, remetenteName, modoDescricao = 'curto' // Adicionado com padrão 'curto'
   } = job.data;
   
   try {
-    this.registrador.debug(`[Etapa 3] Iniciando análise do vídeo: ${fileName} (Job ${job.id})`);
+    this.registrador.debug(`[Etapa 3] Iniciando análise do vídeo: ${fileName} (Job ${job.id}) no modo ${modoDescricao}`);
     
     // Obter configurações do usuário
     const config = await this.obterConfigProcessamento(chatId);
@@ -526,12 +491,12 @@ this.videoAnalysisQueue.process('analyze-video', 3, async (job) => {
     // Obter modelo
     const modelo = this.gerenciadorAI.obterOuCriarModelo(config);
     
-    // Obter modo de descrição das configurações
-    const modoDescricao = config.modoDescricao || 'longo';
+    // Registrar o modo de descrição
+    this.registrador.debug(`Usando modo de descrição: ${modoDescricao} para vídeo`);
     
     // Preparar o prompt adequado com base no modo
     const { obterPromptVideo, obterPromptVideoCurto } = require('../../config/InstrucoesSistema');
-    const promptBase = modoDescricao === 'curto' ? obterPromptVideoCurto() : obterPromptVideo();
+    const promptBase = modoDescricao === 'longo' ? obterPromptVideo() : obterPromptVideoCurto();
     
     // Preparar partes de conteúdo
     const partesConteudo = [
@@ -542,7 +507,7 @@ this.videoAnalysisQueue.process('analyze-video', 3, async (job) => {
         }
       },
       {
-        text: (config.systemInstructions || promptBase) + "\n" + userPrompt
+        text: promptBase + "\n" + userPrompt
       }
     ];
     

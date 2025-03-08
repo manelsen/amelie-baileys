@@ -61,24 +61,22 @@ Inclua:
 Crie uma descrição organizada e acessível.`;
 
 // Adicionar um novo prompt para o modo de descrição curta para imagens
-const PROMPT_ESPECIFICO_IMAGEM_CURTO = `Mantenha suas respostas concisas, mas informativas. Use linguagem clara e acessível, evitando termos técnicos desnecessários. Seja respeitosa e inclusiva em todas as suas interações.
+const PROMPT_ESPECIFICO_IMAGEM_CURTO = `Mantenha suas respostas concisas, mas informativas. Use linguagem clara e acessível, evitando termos técnicos desnecessários. 
       
-Estrutura da Resposta: Para cada imagem ou sticker, sua resposta deve seguir este formato:
+Estrutura da Resposta: Para cada imagem, forneça uma única descrição objetiva e concisa com no máximo 200 caracteres, sem formatação especial, sem emojis e sem introduções.
       
 [Audiodescrição]
-(Forneça uma descrição objetiva e concisa da imagem em no máximo 200 caracteres)
+(Uma descrição concisa de no máximo 200 caracteres - seja rigoroso neste limite)
 [Fim da Audiodescrição]
       
-Diretrizes para a Descrição Profissional:
-Comece com uma visão geral da imagem antes de entrar em detalhes.
-Descreva os elementos principais da imagem.
-Mencione cores, formas e texturas quando forem significativas para a compreensão.
-Mencione o tipo de imagem (por exemplo, fotografia, ilustração, pintura).
-Inclua detalhes do cenário ou fundo que contribuam para o contexto.
-Evite usar termos subjetivos como "bonito" ou "feio".
-Seja específico com números (por exemplo, "três pessoas" em vez de "algumas pessoas").
-Descreva texto visível na imagem, incluindo legendas ou títulos.
-Para obras de arte, inclua informações sobre o estilo artístico e técnicas utilizadas.`;
+Diretrizes:
+- Comece diretamente com a descrição, sem introduções como "A imagem mostra..." 
+- Foque apenas nos elementos principais visíveis
+- Priorize pessoas, objetos centrais e contexto básico
+- Use frases curtas e diretas
+- Evite termos técnicos desnecessários
+- Omita detalhes secundários para manter a brevidade
+- Nunca exceda o limite de 200 caracteres`;
 
 // Prompt específico para vídeos (numerado como solicitado)
 const PROMPT_ESPECIFICO_VIDEO = `Analise este vídeo de forma extremamente detalhada para pessoas com deficiência visual.
@@ -94,21 +92,24 @@ Inclua:
 Crie uma descrição organizada e acessível.`;
 
 // Adicionar um novo prompt para o modo de descrição curta para vídeos
-const PROMPT_ESPECIFICO_VIDEO_CURTO = `Mantenha suas respostas concisas, mas informativas. Use linguagem clara e acessível, evitando termos técnicos desnecessários. Seja respeitosa e inclusiva em todas as suas interações.
+const PROMPT_ESPECIFICO_VIDEO_CURTO = `Mantenha suas respostas concisas, mas informativas. Use linguagem clara e acessível, evitando termos técnicos desnecessários.
       
 Estrutura da Resposta: Para este vídeo, sua resposta deve seguir este formato:
       
 [Audiodescrição de Vídeo]
-(Forneça uma descrição objetiva e concisa do vídeo em no máximo 200 caracteres)
+(Uma descrição objetiva e concisa do vídeo em no máximo 200 caracteres - seja rigoroso neste limite)
 [Fim da Audiodescrição]
       
 Diretrizes para a Descrição de Vídeo:
-Comece com uma visão geral do vídeo.
-Descreva apenas as ações e elementos principais.
-Mencione pessoas e objetos centrais à narrativa.
-Informe movimentos importantes e mudanças de cena.
-Mencione textos ou elementos informativos visíveis.
-Seja específico mas breve sobre números de pessoas ou elementos.`;
+- Comece diretamente com a descrição, sem introduções como "O vídeo mostra..."
+- Foque apenas nas ações e elementos principais
+- Priorize pessoas, objetos centrais e contexto básico
+- Descreva apenas os movimentos essenciais
+- Use frases curtas e diretas
+- Evite termos técnicos desnecessários
+- Omita detalhes secundários para manter a brevidade
+- Nunca exceda o limite de 200 caracteres
+- Não inclua emojis ou formatação especial`;
 
 // Funções para obter as instruções completas
 const obterInstrucaoPadrao = () => INSTRUCAO_BASE;
