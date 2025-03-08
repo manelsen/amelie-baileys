@@ -664,7 +664,7 @@ this.videoAnalysisQueue.process('analyze-video', 3, async (job) => {
       const { tempFilename, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId, remetenteName } = job.data;
       
       try {
-        this.registrador.info(`Processando vídeo através da fila principal: ${tempFilename} (Job ${job.id})`);
+        this.registrador.info(`Processando vídeo através da fila principal - Job ${job.id}`);
         
         // Redirecionar para o novo fluxo de processamento em estágios
         const uploadJob = await this.videoUploadQueue.add('upload-video', {
