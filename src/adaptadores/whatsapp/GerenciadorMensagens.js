@@ -324,6 +324,9 @@ Comandos:
 .video - Liga/desliga a interpretação de vídeo
 .imagem - Liga/desliga a audiodescrição de imagem
 
+.longo - Usa audiodescrição longa e detalhada
+.curto - Usa audiodescrição curta e concisa
+
 .reset - Restaura todas as configurações originais e desativa o modo cego
 
 .ajuda - Mostra esta mensagem de ajuda`;
@@ -357,6 +360,14 @@ Comandos:
 
         case 'imagem':
           await this.tratarComandoAlternarMidia(msg, chatId, 'mediaImage', 'audiodescrição de imagem');
+          return true;
+
+        case 'longo':
+          await this.tratarComandoLongo(msg, chatId);
+          return true;
+
+        case 'curto':
+          await this.tratarComandoCurto(msg, chatId);
           return true;
 
         case 'filas':
@@ -483,6 +494,9 @@ Esses são meus comandos disponíveis para configuração:
 .audio - Liga/desliga a transcrição de áudio
 .video - Liga/desliga a interpretação de vídeo
 .imagem - Liga/desliga a audiodescrição de imagem
+
+.longo - Usa audiodescrição longa e detalhada
+.curto - Usa audiodescrição curta e concisa
 
 .reset - Restaura todas as configurações originais e desativa o modo cego
 
@@ -1476,6 +1490,64 @@ case 'get':
 default:
   await msg.reply('Subcomando de config desconhecido. Use .ajuda para ver os comandos disponíveis.');
 }
+}
+
+/**
+ * Configura o modo de descrição longa para imagens e vídeos
+ * @param {Object} msg - Mensagem recebida
+ * @param {string} chatId - ID do chat
+ * @async
+ */
+async tratarComandoLongo(msg, chatId) {
+  try {
+    const BOT_NAME = process.env.BOT_NAME || 'Amélie';
+    
+    // Configurar para usar descrição longa
+    await this.gerenciadorConfig.definirConfig(chatId, 'mediaImage', true);
+    await this.gerenciadorConfig.definirConfig(chatId, 'mediaVideo', true);
+    await this.gerenciadorConfig.definirConfig(chatId, 'modoDescricao', 'longo');
+    
+    // Certificar-se de que nenhum prompt personalizado está interferindo
+    await this.gerenciadorConfig.limparPromptSistemaAtivo(chatId);
+    
+    await msg.reply('Modo de descrição longa e detalhada ativado para imagens e vídeos. Toda mídia visual será descrita com o máximo de detalhes possível.');
+    
+    this.registrador.info(`Modo de descrição longa ativado para o chat ${chatId}`);
+    return true;
+  } catch (erro) {
+    this.registrador.error(`Erro ao aplicar modo de descrição longa: ${erro.message}`, { erro });
+    await msg.reply('Desculpe, ocorreu um erro ao configurar o modo de descrição longa. Por favor, tente novamente.');
+    return false;
+  }
+}
+
+/**
+ * Configura o modo de descrição curta para imagens e vídeos
+ * @param {Object} msg - Mensagem recebida
+ * @param {string} chatId - ID do chat
+ * @async
+ */
+async tratarComandoCurto(msg, chatId) {
+  try {
+    const BOT_NAME = process.env.BOT_NAME || 'Amélie';
+    
+    // Configurar para usar descrição curta
+    await this.gerenciadorConfig.definirConfig(chatId, 'mediaImage', true);
+    await this.gerenciadorConfig.definirConfig(chatId, 'mediaVideo', true);
+    await this.gerenciadorConfig.definirConfig(chatId, 'modoDescricao', 'curto');
+    
+    // Certificar-se de que nenhum prompt personalizado está interferindo
+    await this.gerenciadorConfig.limparPromptSistemaAtivo(chatId);
+    
+    await msg.reply('Modo de descrição curta e concisa ativado para imagens e vídeos. Toda mídia visual será descrita de forma breve e objetiva, limitado a cerca de 200 caracteres.');
+    
+    this.registrador.info(`Modo de descrição curta ativado para o chat ${chatId}`);
+    return true;
+  } catch (erro) {
+    this.registrador.error(`Erro ao aplicar modo de descrição curta: ${erro.message}`, { erro });
+    await msg.reply('Desculpe, ocorreu um erro ao configurar o modo de descrição curta. Por favor, tente novamente.');
+    return false;
+  }
 }
 
 /**

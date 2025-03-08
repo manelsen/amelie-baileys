@@ -134,6 +134,9 @@ Esses são meus comandos disponíveis para configuração:
 .video - Liga/desliga a interpretação de vídeo
 .imagem - Liga/desliga a audiodescrição de imagem
 
+.longo - Usa audiodescrição longa e detalhada
+.curto - Usa audiodescrição curta e concisa
+
 .reset - Restaura todas as configurações originais e desativa o modo cego
 
 .ajuda - Mostra esta mensagem de ajuda`;

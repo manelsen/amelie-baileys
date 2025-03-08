@@ -97,6 +97,54 @@ class GerenciadorAI extends IAPort {
   }
 
   /**
+   * Obtém configurações para processamento de imagem
+   * @param {string} chatId - ID do chat
+   * @returns {Promise<Object>} Configurações do processamento
+   */
+  async obterConfigProcessamento(chatId) {
+    try {
+      // Tentar obter configurações do gerenciador
+      if (this.gerenciadorConfig) {
+        const config = await this.gerenciadorConfig.obterConfig(chatId);
+        
+        // Obter o modo de audiodescrição
+        const modoAudiodescricao = config.modoAudiodescricao || 'longo';
+        
+        // Ajustar as instruções de sistema com base no modo
+        let sistemInstructions;
+        if (modoAudiodescricao === 'curto') {
+          sistemInstructions = obterInstrucaoImagemCurta();
+        } else {
+          sistemInstructions = obterInstrucaoImagem();
+        }
+        
+        return {
+          temperature: config.temperature || 0.7,
+          topK: config.topK || 1,
+          topP: config.topP || 0.95,
+          maxOutputTokens: config.maxOutputTokens || 800,
+          model: config.model || "gemini-2.0-flash",
+          systemInstructions: sistemInstructions,
+          modoAudiodescricao
+        };
+      }
+    } catch (erro) {
+      this.registrador.warn(`Erro ao obter configurações: ${erro.message}, usando padrão`);
+    }
+    
+    // Configuração padrão
+    return {
+      temperature: 0.7,
+      topK: 1,
+      topP: 0.95,
+      maxOutputTokens: 800,
+      model: "gemini-2.0-flash", // Usar o modelo rápido para imagens simples
+      systemInstructions: obterInstrucaoImagem(),
+      modoAudiodescricao: 'longo'
+    };
+  }
+  
+  /**
    * Obtém ou cria um modelo com as configurações especificadas
    * @param {Object} config - Configurações do modelo
    * @returns {Object} Instância do modelo

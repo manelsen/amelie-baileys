@@ -28,6 +28,9 @@ Comandos:
 .video - Liga/desliga a interpretação de vídeo
 .imagem - Liga/desliga a audiodescrição de imagem
 
+.longo - Usa audiodescrição longa e detalhada para imagens e vídeos
+.curto - Usa audiodescrição curta e concisa para imagens e vídeos
+
 .reset - Restaura todas as configurações originais e desativa o modo cego
 
 .ajuda - Mostra esta mensagem de ajuda
@@ -57,6 +60,26 @@ Inclua:
 
 Crie uma descrição organizada e acessível.`;
 
+// Adicionar um novo prompt para o modo de descrição curta para imagens
+const PROMPT_ESPECIFICO_IMAGEM_CURTO = `Mantenha suas respostas concisas, mas informativas. Use linguagem clara e acessível, evitando termos técnicos desnecessários. Seja respeitosa e inclusiva em todas as suas interações.
+      
+Estrutura da Resposta: Para cada imagem ou sticker, sua resposta deve seguir este formato:
+      
+[Audiodescrição]
+(Forneça uma descrição objetiva e concisa da imagem em no máximo 200 caracteres)
+[Fim da Audiodescrição]
+      
+Diretrizes para a Descrição Profissional:
+Comece com uma visão geral da imagem antes de entrar em detalhes.
+Descreva os elementos principais da imagem.
+Mencione cores, formas e texturas quando forem significativas para a compreensão.
+Mencione o tipo de imagem (por exemplo, fotografia, ilustração, pintura).
+Inclua detalhes do cenário ou fundo que contribuam para o contexto.
+Evite usar termos subjetivos como "bonito" ou "feio".
+Seja específico com números (por exemplo, "três pessoas" em vez de "algumas pessoas").
+Descreva texto visível na imagem, incluindo legendas ou títulos.
+Para obras de arte, inclua informações sobre o estilo artístico e técnicas utilizadas.`;
+
 // Prompt específico para vídeos (numerado como solicitado)
 const PROMPT_ESPECIFICO_VIDEO = `Analise este vídeo de forma extremamente detalhada para pessoas com deficiência visual.
 Inclua:
@@ -70,6 +93,23 @@ Inclua:
 
 Crie uma descrição organizada e acessível.`;
 
+// Adicionar um novo prompt para o modo de descrição curta para vídeos
+const PROMPT_ESPECIFICO_VIDEO_CURTO = `Mantenha suas respostas concisas, mas informativas. Use linguagem clara e acessível, evitando termos técnicos desnecessários. Seja respeitosa e inclusiva em todas as suas interações.
+      
+Estrutura da Resposta: Para este vídeo, sua resposta deve seguir este formato:
+      
+[Audiodescrição de Vídeo]
+(Forneça uma descrição objetiva e concisa do vídeo em no máximo 200 caracteres)
+[Fim da Audiodescrição]
+      
+Diretrizes para a Descrição de Vídeo:
+Comece com uma visão geral do vídeo.
+Descreva apenas as ações e elementos principais.
+Mencione pessoas e objetos centrais à narrativa.
+Informe movimentos importantes e mudanças de cena.
+Mencione textos ou elementos informativos visíveis.
+Seja específico mas breve sobre números de pessoas ou elementos.`;
+
 // Funções para obter as instruções completas
 const obterInstrucaoPadrao = () => INSTRUCAO_BASE;
 
@@ -79,21 +119,35 @@ const obterInstrucaoAudio = () =>
 const obterInstrucaoImagem = () => 
   `${INSTRUCAO_BASE}\n\n${PROMPT_ESPECIFICO_IMAGEM}`;
 
+const obterInstrucaoImagemCurta = () => 
+  `${INSTRUCAO_BASE}\n\n${PROMPT_ESPECIFICO_IMAGEM_CURTO}`;
+
 const obterInstrucaoVideo = () => 
   `${INSTRUCAO_BASE}\n\n${PROMPT_ESPECIFICO_VIDEO}`;
 
+const obterInstrucaoVideoCurta = () => 
+  `${INSTRUCAO_BASE}\n\n${PROMPT_ESPECIFICO_VIDEO_CURTO}`;
+
 // Funções para obter apenas os prompts específicos
 const obterPromptImagem = () => PROMPT_ESPECIFICO_IMAGEM;
+const obterPromptImagemCurto = () => PROMPT_ESPECIFICO_IMAGEM_CURTO;
 const obterPromptVideo = () => PROMPT_ESPECIFICO_VIDEO;
+const obterPromptVideoCurto = () => PROMPT_ESPECIFICO_VIDEO_CURTO;
 
 module.exports = {
   INSTRUCAO_BASE,
   PROMPT_ESPECIFICO_IMAGEM,
+  PROMPT_ESPECIFICO_IMAGEM_CURTO,
   PROMPT_ESPECIFICO_VIDEO,
+  PROMPT_ESPECIFICO_VIDEO_CURTO,
   obterInstrucaoPadrao,
   obterInstrucaoAudio,
   obterInstrucaoImagem,
+  obterInstrucaoImagemCurta,
   obterInstrucaoVideo,
+  obterInstrucaoVideoCurta,
   obterPromptImagem,
-  obterPromptVideo
+  obterPromptImagemCurto,
+  obterPromptVideo,
+  obterPromptVideoCurto
 };

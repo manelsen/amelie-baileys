@@ -116,7 +116,11 @@ async resetarConfig(chatId) {
   return new Promise((resolve, reject) => {
     this.configDb.update(
       { chatId },
-      { $set: this.configPadrao },
+      { $set: {
+        ...this.configPadrao,
+        modoDescricao: 'longo', // Resetar o modo de descrição para o padrão
+        activePrompt: null // Limpar prompt ativo
+      }},
       { upsert: true },
       (err) => {
         if (err) {

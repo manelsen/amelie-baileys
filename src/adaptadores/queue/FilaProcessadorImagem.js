@@ -223,44 +223,48 @@ class FilaProcessadorImagem {
     });
     
     // 2. Processador para análise da imagem
-    this.imageAnalysisQueue.process('analyze-image', 5, async (job) => {
-      const { 
-        imageData, chatId, messageId, mimeType, userPrompt, senderNumber, 
-        transacaoId, uploadTimestamp, remetenteName 
-      } = job.data;
-      
-      try {
-        this.registrador.debug(`[Etapa 2] Iniciando análise da imagem (Job ${job.id})`);
-        
-        // Se a análise está demorando, notificar via callback
-        if (Date.now() - uploadTimestamp > 10000 && this.respostaCallback) {
-          this.respostaCallback({
-            resposta: "Estou analisando sua imagem... isso pode levar alguns segundos.",
-            chatId,
-            messageId,
-            senderNumber,
-            transacaoId,
-            isProgress: true
-          });
-        }
-        
-        // Obter configurações do usuário
-        const config = await this.obterConfigProcessamento(chatId);
-        
-        // Usar o gerenciadorAI para processar a imagem
-        const parteImagem = {
-          inlineData: {
-            data: imageData.data,
-            mimeType: imageData.mimetype
-          }
-        };
-        
-        const promptFinal = this.prepararPromptUsuario(userPrompt);
-        
-        const partesConteudo = [
-          parteImagem,
-          { text: promptFinal }
-        ];
+this.imageAnalysisQueue.process('analyze-image', 5, async (job) => {
+  const { 
+    imageData, chatId, messageId, mimeType, userPrompt, senderNumber, 
+    transacaoId, uploadTimestamp, remetenteName 
+  } = job.data;
+  
+  try {
+    this.registrador.debug(`[Etapa 2] Iniciando análise da imagem (Job ${job.id})`);
+    
+    // Se a análise está demorando, notificar via callback
+    if (Date.now() - uploadTimestamp > 10000 && this.respostaCallback) {
+      this.respostaCallback({
+        resposta: "Estou analisando sua imagem... isso pode levar alguns segundos.",
+        chatId,
+        messageId,
+        senderNumber,
+        transacaoId,
+        isProgress: true
+      });
+    }
+    
+    // Obter configurações do usuário
+    const config = await this.obterConfigProcessamento(chatId);
+    
+    // Usar o gerenciadorAI para processar a imagem
+    const parteImagem = {
+      inlineData: {
+        data: imageData.data,
+        mimeType: imageData.mimetype
+      }
+    };
+    
+    // Obter modo de audiodescrição das configurações
+    const modoAudiodescricao = config.modoAudiodescricao || 'longo';
+    
+    // Usar o modo correto para o prompt
+    const promptFinal = this.prepararPromptUsuario(userPrompt, modoAudiodescricao);
+    
+    const partesConteudo = [
+      parteImagem,
+      { text: promptFinal }
+    ];
         
         // Obter modelo
         const modelo = this.gerenciadorAI.obterOuCriarModelo(config);
@@ -416,23 +420,19 @@ class FilaProcessadorImagem {
   /**
    * Prepara o prompt do usuário, adicionando orientações se necessário
    * @param {string} promptUsuario - Prompt original do usuário
+   * @param {string} modoDescricao - Modo de descrição (longo ou curto)
    * @returns {string} Prompt processado
    */
-  prepararPromptUsuario(promptUsuario) {
-    // Se não tiver prompt do usuário, usar o padrão para audiodescrição
+  prepararPromptUsuario(promptUsuario, modoDescricao = 'longo') {
+    // Se não tiver prompt do usuário, usar o padrão para descrição
     if (!promptUsuario || promptUsuario.trim() === '') {
-      return `Analise esta imagem de forma extremamente detalhada para pessoas com deficiência visual.
-      Inclua:
-      1. Se for uma receita, recibo ou documento, transcreva o texto integralmente, verbatim, incluindo, mas não limitado, a CNPJ, produtos, preços, nomes de remédios, posologia, nome do profissional e CRM, etc.
-      2. Número exato de pessoas, suas posições e roupas (cores, tipos)
-      3. Ambiente e cenário completo, em todos os planos
-      4. Todos os objetos visíveis 
-      5. Movimentos e ações detalhadas
-      6. Expressões faciais
-      7. Textos visíveis
-      8. Qualquer outro detalhe relevante
-
-      Crie uma descrição organizada e acessível.`;
+      const { obterPromptImagem, obterPromptImagemCurto } = require('../../config/InstrucoesSistema');
+      
+      if (modoDescricao === 'curto') {
+        return obterPromptImagemCurto();
+      } else {
+        return obterPromptImagem();
+      }
     }
     
     return promptUsuario;
@@ -520,7 +520,35 @@ class FilaProcessadorImagem {
    * @returns {Promise<Object>} Configurações do processamento
    */
   async obterConfigProcessamento(chatId) {
-    // Configuração padrão - normalmente seria obtida do ConfigManager
+    try {
+      // Tentar obter configurações do gerenciador de configurações, se existir
+      if (this.gerenciadorConfig) {
+        const config = await this.gerenciadorConfig.obterConfig(chatId);
+        
+        // Usar o modo de descrição configurado
+        const modoDescricao = config.modoDescricao || 'longo';
+        const { obterInstrucaoImagem, obterInstrucaoImagemCurta } = require('../../config/InstrucoesSistema');
+        
+        // Escolher as instruções apropriadas com base no modo
+        const systemInstructions = modoDescricao === 'curto' 
+          ? obterInstrucaoImagemCurta() 
+          : obterInstrucaoImagem();
+        
+        return {
+          temperature: config.temperature || 0.7,
+          topK: config.topK || 1,
+          topP: config.topP || 0.95,
+          maxOutputTokens: config.maxOutputTokens || 800,
+          model: "gemini-2.0-flash",
+          systemInstructions,
+          modoDescricao
+        };
+      }
+    } catch (erro) {
+      this.registrador.warn(`Erro ao obter configurações específicas: ${erro.message}, usando padrão`);
+    }
+    
+    // Configuração padrão
     return {
       temperature: 0.7,
       topK: 1,
@@ -549,6 +577,9 @@ Comandos:
 .video - Liga/desliga a interpretação de vídeo
 .imagem - Liga/desliga a audiodescrição de imagem
 
+.longo - Usa audiodescrição longa e detalhada para imagens e vídeos
+.curto - Usa audiodescrição curta e concisa para imagens e vídeos
+
 .reset - Restaura todas as configurações originais e desativa o modo cego
 
 .ajuda - Mostra esta mensagem de ajuda
@@ -575,7 +606,8 @@ Comandos:
       7. Textos visíveis
       8. Qualquer outro detalhe relevante
 
-      Crie uma descrição organizada e acessível.`
+      Crie uma descrição organizada e acessível.`,
+      modoDescricao: 'longo'
     };
   }
 
