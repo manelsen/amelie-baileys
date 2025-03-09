@@ -13,9 +13,10 @@ backup*
 auth_info_multi/
 blocked_videos
 transacoesMensagens.js
-tx_*
+travamento*
 inactive_restart_*
 temp/*
 blocked/*
 package-lock.json
 memoria.sh
+diagnosticos/travamento_2025-03-09T17-46-27-046Z.json
