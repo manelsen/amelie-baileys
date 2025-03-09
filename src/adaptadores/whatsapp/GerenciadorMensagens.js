@@ -12,59 +12,69 @@ const FilaProcessadorImagem = require('../queue/FilaProcessadorImagem');
 const FilaProcessador = require('../queue/FilaProcessador');
 
 class GerenciadorMensagens {
-  /**
-   * Cria uma instância do gerenciador de mensagens
-   * @param {Object} registrador - Objeto logger para registro de eventos
-   * @param {Object} clienteWhatsApp - Instância do cliente WhatsApp
-   * @param {Object} gerenciadorConfig - Gerenciador de configurações do sistema
-   * @param {Object} gerenciadorAI - Gerenciador de modelos de IA
-   * @param {Object} filaProcessamento - Fila de processamento para tarefas assíncronas
-   * @param {Object} gerenciadorTransacoes - Gerenciador de transações de mensagens
-   */
-  constructor(registrador, clienteWhatsApp, gerenciadorConfig, gerenciadorAI, filaProcessamento, gerenciadorTransacoes) {
-    this.registrador = registrador;
-    this.clienteWhatsApp = clienteWhatsApp;
-    this.gerenciadorConfig = gerenciadorConfig;
-    this.gerenciadorAI = gerenciadorAI;
-    this.filaProcessamento = filaProcessamento;
-    this.gerenciadorTransacoes = gerenciadorTransacoes;
-    
-    // Inicializar a fila de processamento, mas não delegar responsabilidades de resposta
-    // A fila agora apenas processa e retorna resultados para este gerenciador
+/**
+ * Construtor do GerenciadorMensagens
+ * @param {Object} registrador - Objeto logger para registro de eventos
+ * @param {Object} clienteWhatsApp - Instância do cliente WhatsApp
+ * @param {Object} gerenciadorConfig - Gerenciador de configurações do sistema
+ * @param {Object} gerenciadorAI - Gerenciador de modelos de IA
+ * @param {Object} filaProcessamento - Fila de processamento para tarefas assíncronas
+ * @param {Object} gerenciadorTransacoes - Gerenciador de transações de mensagens
+ * @param {Object} servicoMensagem - Serviço centralizado de envio de mensagens
+ */
+constructor(registrador, clienteWhatsApp, gerenciadorConfig, gerenciadorAI, filaProcessamento, gerenciadorTransacoes, servicoMensagem) {
 
-    this.filaProcessamento = new FilaProcessador(
-      registrador, 
-      gerenciadorAI, 
-      null, // Removendo referência direta ao clienteWhatsApp
-      { enviarRespostaDireta: false } // Configuração para impedir respostas diretas
-    );
+  this.registrador = registrador;
+  this.clienteWhatsApp = clienteWhatsApp;
+  this.gerenciadorConfig = gerenciadorConfig;
+  this.gerenciadorAI = gerenciadorAI;
+  this.filaProcessamento = filaProcessamento;
+  this.gerenciadorTransacoes = gerenciadorTransacoes;
+  this.servicoMensagem = servicoMensagem || { 
+  enviarResposta: this.enviarResposta.bind(this) // Fallback para compatibilidade
+  };
+  
+  // Serviço centralizado de mensagens (novo!)
+  this.servicoMensagem = servicoMensagem || { 
+    enviarResposta: this.enviarResposta.bind(this) // Fallback para compatibilidade
+  };
+  
+  // Inicializar a fila de processamento, mas não delegar responsabilidades de resposta
+  // A fila agora apenas processa e retorna resultados para este gerenciador
+  this.filaProcessamento = new FilaProcessador(
+    registrador, 
+    gerenciadorAI, 
+    null, // Removendo referência direta ao clienteWhatsApp
+    { enviarRespostaDireta: false } // Configuração para impedir respostas diretas
+  );
 
-    this.filaProcessamentoImagem = new FilaProcessadorImagem(
-      registrador, 
-      gerenciadorAI, 
-      null, // Removendo referência direta ao clienteWhatsApp
-      { enviarRespostaDireta: false } // Configuração para impedir respostas diretas
-    );
-
-    
-    this.ultimoAudioProcessado = null;
-    this.diretorioTemp = '../temp';
-    
-    // Adicionar cache para controle de deduplicação de mensagens
-    this.mensagensProcessadas = new Map();
-    
-    // Intervalo para limpar o cache periodicamente (a cada 30 minutos)
-    setInterval(() => this.limparCacheMensagensAntigas(), 30 * 60 * 1000);
-    
-    // Garantir que o diretório temporário exista
-    if (!fs.existsSync(this.diretorioTemp)) {
-      fs.mkdirSync(this.diretorioTemp, { recursive: true });
-      this.registrador.info('Diretório de arquivos temporários criado');
-    }
-    
-    // Configurar callback para receber resultados de processamento de imagem
-    this.configurarCallbacksProcessamento();
+  this.filaProcessamentoImagem = new FilaProcessadorImagem(
+    registrador, 
+    gerenciadorAI, 
+    null, // Removendo referência direta ao clienteWhatsApp
+    { enviarRespostaDireta: false } // Configuração para impedir respostas diretas
+  );
+  
+  // Removida a criação do FilaProcessadorAudio que não existe
+  
+  this.ultimoAudioProcessado = null;
+  this.diretorioTemp = '../temp';
+  
+  // Adicionar cache para controle de deduplicação de mensagens
+  this.mensagensProcessadas = new Map();
+  
+  // Intervalo para limpar o cache periodicamente (a cada 30 minutos)
+  setInterval(() => this.limparCacheMensagensAntigas(), 30 * 60 * 1000);
+  
+  // Garantir que o diretório temporário exista
+  if (!fs.existsSync(this.diretorioTemp)) {
+    fs.mkdirSync(this.diretorioTemp, { recursive: true });
+    this.registrador.info('Diretório de arquivos temporários criado');
   }
+  
+  // Configurar callback para receber resultados de processamento
+  this.configurarCallbacksProcessamento();
+}
 
 /**
  * Inicializa o gerenciador e configura recuperação de mensagens
@@ -86,70 +96,50 @@ iniciar() {
 }
 
   /**
-   * Configura callbacks para receber resultados do processamento de filas
-   */
-  configurarCallbacksProcessamento() {
-    // Registrar callback para receber respostas da fila de imagem
-    this.filaProcessamentoImagem.setRespostaCallback(async (resultado) => {
+ * Configura callbacks para receber resultados do processamento de filas
+ */
+configurarCallbacksProcessamento() {
+  // Definir uma função de processamento que usa nosso serviço centralizado
+  const processarResultadoFila = async (resultado) => {
+    try {
+      const { resposta, chatId, messageId, senderNumber, transacaoId, remetenteName } = resultado;
+      
+      // Recuperar mensagem original por referência usando o ID da mensagem
+      let mensagemOriginal;
       try {
-        const { resposta, chatId, messageId, senderNumber, transacaoId, remetenteName } = resultado;
-        
-        // Recuperar mensagem original por referência usando o ID da mensagem
-        let mensagemOriginal;
-        try {
-          mensagemOriginal = await this.clienteWhatsApp.cliente.getMessageById(messageId);
-        } catch (erroMsg) {
-          this.registrador.error(`Não foi possível recuperar a mensagem original: ${erroMsg.message}`);
-          // Tentar enviar sem referência caso não consiga recuperar
-          await this.clienteWhatsApp.enviarMensagem(senderNumber, resposta);
-          return;
-        }
-        
-        // Enviar resposta usando o cliente WhatsApp - o log será feito dentro deste método
-        await this.enviarResposta(mensagemOriginal, resposta);
-        
-        // Atualizar a transação se houver um ID
-        if (transacaoId) {
-          await this.gerenciadorTransacoes.adicionarRespostaTransacao(transacaoId, resposta);
-          await this.gerenciadorTransacoes.marcarComoEntregue(transacaoId);
-        }
-      } catch (erro) {
-        this.registrador.error(`Erro ao processar resultado da fila de imagem: ${erro.message}`, { erro });
+        mensagemOriginal = await this.clienteWhatsApp.cliente.getMessageById(messageId);
+      } catch (erroMsg) {
+        this.registrador.error(`Não foi possível recuperar a mensagem original: ${erroMsg.message}`);
+        // Tentar enviar sem referência caso não consiga recuperar
+        await this.servicoMensagem.enviarResposta(
+          { from: senderNumber }, // Objeto simples para compatibilidade
+          resposta,
+          transacaoId
+        );
+        return;
       }
-    });
-    
-    // Verificar se o processador de vídeo tem a função setResultCallback antes de chamar
-    if (this.filaProcessamento && typeof this.filaProcessamento.setResultCallback === 'function') {
-      this.filaProcessamento.setResultCallback(async (resultado) => {
-        try {
-          const { resposta, chatId, messageId, senderNumber, transacaoId, remetenteName } = resultado;
-          
-          // Similar ao callback de imagem, mas para vídeos
-          let mensagemOriginal;
-          try {
-            mensagemOriginal = await this.clienteWhatsApp.cliente.getMessageById(messageId);
-          } catch (erroMsg) {
-            this.registrador.error(`Não foi possível recuperar a mensagem de vídeo original: ${erroMsg.message}`);
-            await this.clienteWhatsApp.enviarMensagem(senderNumber, resposta);
-            return;
-          }
-          
-          // Enviar resposta - o log será feito dentro deste método
-          await this.enviarResposta(mensagemOriginal, resposta);
-          
-          // Atualizar a transação
-          if (transacaoId) {
-            await this.gerenciadorTransacoes.adicionarRespostaTransacao(transacaoId, resposta);
-            await this.gerenciadorTransacoes.marcarComoEntregue(transacaoId);
-          }
-        } catch (erro) {
-          this.registrador.error(`Erro ao processar resultado da fila de vídeo: ${erro.message}`, { erro });
-        }
-      });
-    } else {
-      this.registrador.warn('Fila de processamento de vídeo não suporta callbacks, algumas funcionalidades podem estar limitadas');
+      
+      // Usar nosso serviço centralizado
+      await this.servicoMensagem.enviarResposta(mensagemOriginal, resposta, transacaoId);
+      
+      // Atualizar a transação se houver um ID
+      if (transacaoId) {
+        await this.gerenciadorTransacoes.adicionarRespostaTransacao(transacaoId, resposta);
+        await this.gerenciadorTransacoes.marcarComoEntregue(transacaoId);
+      }
+    } catch (erro) {
+      this.registrador.error(`Erro ao processar resultado de fila: ${erro.message}`, { erro });
     }
+  };
+
+  // Usar a mesma função de processamento para todas as filas
+  this.filaProcessamentoImagem.setRespostaCallback(processarResultadoFila);
+  
+  // Verificar se o processador de vídeo tem a função setResultCallback antes de chamar
+  if (this.filaProcessamento && typeof this.filaProcessamento.setResultCallback === 'function') {
+    this.filaProcessamento.setResultCallback(processarResultadoFila);
   }
+}
 
   /**
    * Limpa mensagens antigas do cache de deduplicação
@@ -821,71 +811,79 @@ async verificarMencaoBotNaMensagem(msg) {
     return 'application/octet-stream';
   }
 
-  /**
-   * Processa uma mensagem com áudio
-   * @param {Object} msg - Mensagem do WhatsApp
-   * @param {Object} audioData - Dados do áudio
-   * @param {string} chatId - ID do chat
-   * @returns {Promise<boolean>} Sucesso do processamento
-   */
-  async processarMensagemAudio(msg, audioData, chatId) {
-    try {
-      const chat = await msg.getChat();
-      const config = await this.gerenciadorConfig.obterConfig(chatId);
-      const remetente = await this.obterOuCriarUsuario(msg.author || msg.from, chat);
-      
-      if (!config.mediaAudio) {
-        return false;
-      }
-      
-      const tamanhoAudioMB = audioData.data.length / (1024 * 1024);
-      if (tamanhoAudioMB > 20) {
-        await msg.reply('Desculpe, só posso processar áudios de até 20MB.');
-        return false;
-      }
-      
-      const ehPTT = audioData.mimetype === 'audio/ogg; codecs=opus';
-      this.registrador.debug(`Processando arquivo de áudio: ${ehPTT ? 'PTT' : 'Áudio regular'}`);
-      
-      const hashAudio = crypto.createHash('md5').update(audioData.data).digest('hex');
-      if (this.ultimoAudioProcessado === hashAudio) {
-        await msg.reply('Este áudio já foi processado recentemente. Por favor, envie um novo áudio.');
-        return false;
-      }
-      this.ultimoAudioProcessado = hashAudio;
-      
-      // Criar transação para esta mensagem
-      const transacao = await this.gerenciadorTransacoes.criarTransacao(msg, chat);
-      this.registrador.info(`Nova transação criada: ${transacao.id} para mensagem de áudio`);
-      
-      // Marcar como processando
-      await this.gerenciadorTransacoes.marcarComoProcessando(transacao.id);
-      
-      // Processar o áudio com a IA
-      const resultado = await this.gerenciadorAI.processarAudio(audioData, hashAudio, config);
-      
-      // Adicionar resposta à transação
-      await this.gerenciadorTransacoes.adicionarRespostaTransacao(transacao.id, resultado);
-      
-      try {
-        const enviado = await this.enviarResposta(msg, resultado);
-        
-        if (enviado) {
-          await this.gerenciadorTransacoes.marcarComoEntregue(transacao.id);
-        }
-        
-        return true;
-      } catch (erroEnvio) {
-        this.registrador.error(`Erro ao enviar resposta de áudio: ${erroEnvio.message}`, { erro: erroEnvio });
-        await this.gerenciadorTransacoes.registrarFalhaEntrega(transacao.id, `Erro ao enviar: ${erroEnvio.message}`);
-        return false;
-      }
-    } catch (erro) {
-      this.registrador.error(`Erro ao processar mensagem de áudio: ${erro.message}`, { erro });
-      await msg.reply('Desculpe, ocorreu um erro ao processar o áudio. Por favor, tente novamente.');
+/**
+ * Processa uma mensagem com áudio
+ * @param {Object} msg - Mensagem do WhatsApp
+ * @param {Object} audioData - Dados do áudio
+ * @param {string} chatId - ID do chat
+ * @returns {Promise<boolean>} Sucesso do processamento
+ */
+async processarMensagemAudio(msg, audioData, chatId) {
+  try {
+    const chat = await msg.getChat();
+    const config = await this.gerenciadorConfig.obterConfig(chatId);
+    const remetente = await this.obterOuCriarUsuario(msg.author || msg.from, chat);
+    
+    if (!config.mediaAudio) {
       return false;
     }
+    
+    const tamanhoAudioMB = audioData.data.length / (1024 * 1024);
+    if (tamanhoAudioMB > 20) {
+      await this.servicoMensagem.enviarResposta(msg, 'Desculpe, só posso processar áudios de até 20MB.');
+      return false;
+    }
+    
+    const ehPTT = audioData.mimetype === 'audio/ogg; codecs=opus';
+    this.registrador.debug(`Processando arquivo de áudio: ${ehPTT ? 'PTT' : 'Áudio regular'}`);
+    
+    const hashAudio = crypto.createHash('md5').update(audioData.data).digest('hex');
+    if (this.ultimoAudioProcessado === hashAudio) {
+      await this.servicoMensagem.enviarResposta(msg, 'Este áudio já foi processado recentemente. Por favor, envie um novo áudio.');
+      return false;
+    }
+    this.ultimoAudioProcessado = hashAudio;
+    
+    // Criar transação para esta mensagem
+    const transacao = await this.gerenciadorTransacoes.criarTransacao(msg, chat);
+    this.registrador.info(`Nova transação criada: ${transacao.id} para mensagem de áudio`);
+    
+    // Marcar como processando
+    await this.gerenciadorTransacoes.marcarComoProcessando(transacao.id);
+    
+    // Processar o áudio com a IA diretamente - sem usar fila
+    const resultado = await this.gerenciadorAI.processarAudio(audioData, hashAudio, config);
+    
+    // Adicionar resposta à transação
+    await this.gerenciadorTransacoes.adicionarRespostaTransacao(transacao.id, resultado);
+    
+    // Enviar resposta usando o serviço
+    try {
+      // Usar o serviço de mensagem centralizado
+      await this.servicoMensagem.enviarResposta(msg, resultado, transacao.id);
+      
+      // Marcar como entregue
+      await this.gerenciadorTransacoes.marcarComoEntregue(transacao.id);
+    } catch (erroEnvio) {
+      this.registrador.error(`Erro ao enviar resposta de áudio: ${erroEnvio.message}`, { erro: erroEnvio });
+      await this.gerenciadorTransacoes.registrarFalhaEntrega(transacao.id, `Erro ao enviar: ${erroEnvio.message}`);
+      return false;
+    }
+    
+    return true;
+  } catch (erro) {
+    this.registrador.error(`Erro ao processar mensagem de áudio: ${erro.message}`, { erro });
+    
+    // Tentar usar o serviço para enviar mensagem de erro, mas com tratamento de exceção
+    try {
+      await this.servicoMensagem.enviarResposta(msg, 'Desculpe, ocorreu um erro ao processar o áudio. Por favor, tente novamente.');
+    } catch (erroEnvio) {
+      this.registrador.error(`Não foi possível enviar mensagem de erro: ${erroEnvio.message}`);
+    }
+    
+    return false;
   }
+}
 
   /**
    * Processa uma mensagem com imagem usando a fila de processamento desacoplada
@@ -1158,12 +1156,19 @@ return {
 }
 
 /**
-* Envia uma resposta à mensagem original
-* @param {Object} mensagemOriginal - Mensagem original para responder
-* @param {string} texto - Texto da resposta
-* @returns {Promise<boolean>} Sucesso do envio
-*/
+ * Envia uma resposta à mensagem original
+ * @param {Object} mensagemOriginal - Mensagem original para responder
+ * @param {string} texto - Texto da resposta
+ * @param {string|null} transacaoId - ID opcional da transação 
+ * @returns {Promise<boolean>} Sucesso do envio
+ */
 async enviarResposta(mensagemOriginal, texto, transacaoId = null) {
+  // Se temos o serviço, usar ele
+  if (this.servicoMensagem && this.servicoMensagem !== this) {
+    return await this.servicoMensagem.enviarResposta(mensagemOriginal, texto, transacaoId);
+  }
+  
+  // Caso contrário, usar a implementação original (para compatibilidade)
   try {
     if (!texto || typeof texto !== 'string' || texto.trim() === '') {
       this.registrador.error('Tentativa de enviar mensagem inválida:', { texto });
@@ -1218,16 +1223,9 @@ async enviarResposta(mensagemOriginal, texto, transacaoId = null) {
     // Log no formato solicitado
     this.registrador.debug(`${prefixoLog}: ${mensagemOriginalTexto}\nResposta: ${textoReduzido}`);
 
-    // Enviar a mensagem usando o método atualizado do ClienteWhatsApp
-    const chatId = chat.id._serialized;
-    const enviado = await this.clienteWhatsApp.enviarMensagem(chatId, textoReduzido, mensagemOriginal);
-
-    // Se não foi enviado mas também não lançou erro, é porque foi enfileirado
-    if (!enviado) {
-      this.registrador.info(`Mensagem para ${chatId} colocada na fila de pendentes`);
-    }
-
-    return enviado;
+    // Usar sempre Reply para garantir citação da mensagem original
+    await mensagemOriginal.reply(textoReduzido);
+    return true;
   } catch (erro) {
     this.registrador.error('Erro ao enviar resposta:', { 
       erro: erro.message,

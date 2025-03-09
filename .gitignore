@@ -19,3 +19,4 @@ temp/*
 blocked/*
 package-lock.json
 memoria.sh
+diagnosticos/*
