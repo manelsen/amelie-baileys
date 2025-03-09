@@ -193,7 +193,7 @@ const gerenciadorMensagens = new GerenciadorMensagens(
 logger.info('✅ Gerenciador de mensagens inicializado');
 
 // 8. Inicializar o monitor de saúde
-const monitorSaude = new MonitorSaude(logger, clienteWhatsApp);
+const monitorSaude = require('./monitoramento/MonitorSaude').criar(logger, clienteWhatsApp);
 logger.info('✅ Monitor de saúde inicializado');
 
 // Configurar eventos do cliente WhatsApp
