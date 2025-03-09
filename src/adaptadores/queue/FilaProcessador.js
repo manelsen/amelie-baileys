@@ -216,129 +216,174 @@ async obterConfigDireta(chatId) {
    */
   configurarProcessadores() {
     // 1. Processador para upload de vídeo
-    this.videoUploadQueue.process('upload-video', 3, async (job) => {
-      const { tempFilename, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId, remetenteName } = job.data;
+this.videoUploadQueue.process('upload-video', 3, async (job) => {
+  const { tempFilename, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId, remetenteName } = job.data;
+  
+  try {
+    this.registrador.debug(`[Etapa 1] Iniciando upload de vídeo: ${tempFilename} (Job ${job.id})`);
+    
+    // Verificar se o arquivo existe
+    if (!fs.existsSync(tempFilename)) {
+      throw new Error("Arquivo temporário do vídeo não encontrado");
+    }
+    
+    // Fazer upload para o Google AI
+    const respostaUpload = await this.gerenciadorAI.gerenciadorArquivos.uploadFile(tempFilename, {
+      mimeType: mimeType || 'video/mp4',
+      displayName: "Vídeo Enviado"
+    });
+    
+    this.registrador.debug(`[Etapa 1] Upload concluído, nome do arquivo: ${respostaUpload.file.name}`);
+    
+    // Pequeno atraso para garantir que o arquivo esteja disponível no sistema do Google
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Adicionar à fila de verificação de processamento com informações mais completas
+    await this.videoProcessingCheckQueue.add('check-processing', {
+      fileName: respostaUpload.file.name,
+      fileUri: respostaUpload.file.uri, // Adicionando URI completa
+      fileData: respostaUpload.file, // Guardando todos os dados retornados
+      tempFilename,
+      chatId,
+      messageId,
+      mimeType,
+      userPrompt,
+      senderNumber,
+      transacaoId,
+      remetenteName,
+      uploadTimestamp: Date.now()
+    });
+    
+    return { success: true, fileName: respostaUpload.file.name };
+  } catch (erro) {
+    this.registrador.error(`[Etapa 1] Erro no upload do vídeo: ${erro.message}`, { erro, jobId: job.id });
+    
+    // Verificar se é um erro de segurança
+    if (erro.message.includes('SAFETY') || erro.message.includes('safety') || 
+        erro.message.includes('blocked') || erro.message.includes('Blocked')) {
+      await this.salvarArquivoBloqueado(tempFilename, {
+        mimeType,
+        erro: erro.message,
+        senderNumber,
+        chatId,
+        messageId,
+        userPrompt,
+        transacaoId,
+        jobId: job.id
+      });
       
-      try {
-        this.registrador.debug(`[Etapa 1] Iniciando upload de vídeo: ${tempFilename} (Job ${job.id})`);
-        
-        // Verificar se o arquivo existe
-        if (!fs.existsSync(tempFilename)) {
-          throw new Error("Arquivo temporário do vídeo não encontrado");
-        }
-        
-        // Fazer upload para o Google AI
-        const respostaUpload = await this.gerenciadorAI.gerenciadorArquivos.uploadFile(tempFilename, {
-          mimeType: mimeType || 'video/mp4',
-          displayName: "Vídeo Enviado"
-        });
-        
-        this.registrador.debug(`[Etapa 1] Upload concluído, nome do arquivo: ${respostaUpload.file.name}`);
-        
-        // Adicionar à fila de verificação de processamento
-        await this.videoProcessingCheckQueue.add('check-processing', {
-          fileName: respostaUpload.file.name,
-          tempFilename,
+      // Notificar via callback ou diretamente
+      if (this.resultCallback) {
+        this.resultCallback({
+          resposta: "Este conteúdo não pôde ser processado por questões de segurança.",
           chatId,
           messageId,
-          mimeType,
-          userPrompt,
           senderNumber,
           transacaoId,
-          remetenteName,
-          uploadTimestamp: Date.now()
+          isError: true,
+          errorType: 'safety',
+          remetenteName
         });
-        
-        return { success: true, fileName: respostaUpload.file.name };
-      } catch (erro) {
-        this.registrador.error(`[Etapa 1] Erro no upload do vídeo: ${erro.message}`, { erro, jobId: job.id });
-        
-        // Verificar se é um erro de segurança
-        if (erro.message.includes('SAFETY') || erro.message.includes('safety') || 
-            erro.message.includes('blocked') || erro.message.includes('Blocked')) {
-          await this.salvarArquivoBloqueado(tempFilename, {
-            mimeType,
-            erro: erro.message,
-            senderNumber,
-            chatId,
-            messageId,
-            userPrompt,
-            transacaoId,
-            jobId: job.id
-          });
-          
-          // Notificar via callback ou diretamente
-          if (this.resultCallback) {
-            this.resultCallback({
-              resposta: "Este conteúdo não pôde ser processado por questões de segurança.",
-              chatId,
-              messageId,
-              senderNumber,
-              transacaoId,
-              isError: true,
-              errorType: 'safety',
-              remetenteName
-            });
-          } else if (this.opcoes.enviarRespostaDireta) {
-            await this.clienteWhatsApp.enviarMensagem(
-              senderNumber, 
-              "Este conteúdo não pôde ser processado por questões de segurança."
-            );
-          }
-        } else {
-          // Notificar sobre outros tipos de erro
-          const errorMessage = this.obterMensagemErroAmigavel(erro);
-          
-          if (this.resultCallback) {
-            this.resultCallback({
-              resposta: errorMessage,
-              chatId,
-              messageId,
-              senderNumber,
-              transacaoId,
-              isError: true,
-              errorType: 'general',
-              remetenteName
-            });
-          } else if (this.opcoes.enviarRespostaDireta) {
-            await this.clienteWhatsApp.enviarMensagem(senderNumber, errorMessage);
-          }
-        }
-        
-        // Limpar arquivo temporário em caso de erro (apenas se não for bloqueio de segurança)
-        if (!erro.message.includes('SAFETY') && !erro.message.includes('safety')) {
-          this.limparArquivoTemporario(tempFilename);
-        }
-        
-        throw erro;
+      } else if (this.opcoes.enviarRespostaDireta) {
+        await this.clienteWhatsApp.enviarMensagem(
+          senderNumber, 
+          "Este conteúdo não pôde ser processado por questões de segurança."
+        );
       }
-    });
+    } else {
+      // Notificar sobre outros tipos de erro
+      const errorMessage = this.obterMensagemErroAmigavel(erro);
+      
+      if (this.resultCallback) {
+        this.resultCallback({
+          resposta: errorMessage,
+          chatId,
+          messageId,
+          senderNumber,
+          transacaoId,
+          isError: true,
+          errorType: 'general',
+          remetenteName
+        });
+      } else if (this.opcoes.enviarRespostaDireta) {
+        await this.clienteWhatsApp.enviarMensagem(senderNumber, errorMessage);
+      }
+    }
+    
+    // Limpar arquivo temporário em caso de erro (apenas se não for bloqueio de segurança)
+    if (!erro.message.includes('SAFETY') && !erro.message.includes('safety')) {
+      this.limparArquivoTemporario(tempFilename);
+    }
+    
+    throw erro;
+  }
+});
     
 // 2. Processador para verificação do estado de processamento
 this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
-  const { fileName, tempFilename, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId, uploadTimestamp, remetenteName, tentativas = 0 } = job.data;
+  const { 
+    fileName, fileUri, fileData, tempFilename, chatId, messageId, 
+    mimeType, userPrompt, senderNumber, transacaoId, 
+    uploadTimestamp, remetenteName, tentativas = 0 
+  } = job.data;
   
   try {
     this.registrador.debug(`[Etapa 2] Verificando processamento do vídeo: ${fileName} (Job ${job.id}), tentativa ${tentativas + 1}`);
     
-    // Se já estamos na tentativa 10, fazer log, mas não enviar feedback ao usuário
+    // Verificar se já passou tempo demais desde o upload (heurística para evitar tentativas inúteis)
+    const tempoDecorrido = Date.now() - uploadTimestamp;
+    if (tempoDecorrido > 120000 && tentativas > 3) { // 2 minutos e já tentou algumas vezes
+      this.registrador.warn(`Arquivo ${fileName} provavelmente expirou (${Math.round(tempoDecorrido/1000)}s após upload). Abortando verificação.`);
+      
+      // Notificar usuário sem tentar acessar o arquivo
+      if (this.resultCallback) {
+        this.resultCallback({
+          resposta: "Parece que seu vídeo é muito complexo e excedeu o tempo de processamento. Poderia tentar novamente com um vídeo mais curto ou de menor resolução?",
+          chatId,
+          messageId,
+          senderNumber,
+          transacaoId,
+          isError: true,
+          errorType: 'file_expired',
+          remetenteName
+        });
+      }
+      
+      // Limpar arquivo temporário
+      this.limparArquivoTemporario(tempFilename);
+      throw new Error(`Arquivo provavelmente expirou após ${Math.round(tempoDecorrido/1000)} segundos`);
+    }
+    
+    // Se já estamos na tentativa 10, enviar feedback ao usuário
     if (tentativas === 10) {
-      this.registrador.debug(`Job ${job.id} - tentativa 10, processamento prolongado`);
+      if (this.resultCallback) {
+        this.resultCallback({
+          resposta: "Seu vídeo está demorando mais que o normal para ser processado. Continuarei tentando, mas pode ser que ele seja muito complexo ou longo.",
+          chatId,
+          messageId,
+          senderNumber,
+          transacaoId,
+          isProgress: true,
+          remetenteName
+        });
+      }
     }
     
     // Obter estado atual do arquivo - com tratamento de erro aprimorado
     let arquivo;
     try {
-      arquivo = await this.gerenciadorAI.gerenciadorArquivos.getFile(fileName);
+      // Tentar usar múltiplas referências de arquivo, priorizando URI se disponível
+      const fileIdentifier = fileUri || fileName;
+      arquivo = await this.gerenciadorAI.gerenciadorArquivos.getFile(fileIdentifier);
     } catch (erroAcesso) {
       // Se for erro 403, tratamos de forma especial
       if (erroAcesso.message && erroAcesso.message.includes('403 Forbidden')) {
         this.registrador.warn(`Arquivo ${fileName} não está mais acessível (403 Forbidden). Abortando processamento.`);
         
-        // Notificar usuário apenas sobre falha final, não sobre progresso
+        // Notificar usuário
         if (this.resultCallback) {
           this.resultCallback({
-            resposta: "Desculpe, encontrei um problema técnico ao processar seu vídeo. Parece que ele é muito complexo para meu sistema. Poderia tentar com um vídeo mais curto ou de menor resolução?",
+            resposta: "Desculpe, encontrei um problema ao processar seu vídeo. O Google AI não conseguiu manter o arquivo disponível para análise. Isso geralmente acontece com vídeos mais longos ou complexos. Poderia tentar com um vídeo mais curto?",
             chatId,
             messageId,
             senderNumber,
@@ -360,17 +405,42 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
     // Reduzir o limite máximo de tentativas para falhar mais cedo
     const maxTentativas = 10; // antes era 12
     
+    // Controle para mensagens de progresso - enviar uma a cada 20 segundos
+    const ultimaMensagemTimestamp = job.data.ultimaMensagemTimestamp || 0;
+    const enviarAtualizacao = Date.now() - ultimaMensagemTimestamp > 20000;
+    
     // Verificar o estado do arquivo
     if (arquivo.state === "PROCESSING") {
       // Se ainda está processando e não excedeu o limite de tentativas, reagendar
       if (tentativas < maxTentativas) {
         this.registrador.debug(`[Etapa 2] Vídeo ainda em processamento, reagendando verificação... (tentativa ${tentativas + 1})`);
         
-        // Reagendar sem enviar mensagem de progresso
+        // Enviar mensagem de progresso apenas se necessário
+        if (enviarAtualizacao) {
+          const mensagemProgresso = "Seu vídeo está sendo processado... isso pode levar alguns minutos para vídeos longos ou complexos.";
+          
+          if (this.resultCallback) {
+            this.resultCallback({
+              resposta: mensagemProgresso,
+              chatId,
+              messageId,
+              senderNumber,
+              transacaoId,
+              isProgress: true,
+              remetenteName
+            });
+          }
+        }
+        
+        // Calcular delay com exponential backoff (500ms, 1s, 2s, 4s, 8s...)
+        const backoffDelay = Math.min(15000, 500 * Math.pow(2, tentativas));
+        
+        // Reagendar com exponential backoff
         await this.videoProcessingCheckQueue.add('check-processing', {
           ...job.data,
-          tentativas: tentativas + 1
-        }, { delay: 15000 });
+          tentativas: tentativas + 1,
+          ultimaMensagemTimestamp: enviarAtualizacao ? Date.now() : job.data.ultimaMensagemTimestamp
+        }, { delay: backoffDelay });
         
         return { success: true, status: "PROCESSING", tentativas: tentativas + 1 };
       } else {
@@ -390,6 +460,7 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
     // Adicionar à fila de análise
     await this.videoAnalysisQueue.add('analyze-video', {
       fileName,
+      fileUri: arquivo.uri || fileUri,  // Usar URI do arquivo atual ou a que foi armazenada
       tempFilename,
       chatId,
       messageId,
@@ -398,11 +469,8 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
       senderNumber,
       transacaoId,
       fileState: arquivo.state,
-      fileUri: arquivo.uri,
       fileMimeType: arquivo.mimeType,
-      remetenteName,
-      // Passar o modo de descrição para a próxima etapa
-      modoDescricao: job.data.modoDescricao || 'curto'
+      remetenteName
     });
     
     return { success: true, status: arquivo.state };
@@ -438,7 +506,7 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
       }
     } else if (erro.message.includes('Forbidden') || erro.message.includes('403')) {
       // Tratar especificamente erros de acesso
-      const mensagemAmigavel = "Ops! Tive um problema técnico ao processar seu vídeo. Parece que ele é muito complexo para meu sistema. Poderia tentar com um vídeo mais curto?";
+      const mensagemAmigavel = "Ops! Tive um problema técnico ao processar seu vídeo. O Google AI não conseguiu manter seu arquivo disponível para análise. Isso acontece com vídeos maiores ou mais complexos. Poderia tentar com um vídeo mais curto?";
       
       if (this.resultCallback) {
         this.resultCallback({
@@ -493,7 +561,9 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
     
     // Tentar excluir o arquivo do Google AI em caso de erro - com tratamento de exceção melhorado
     try {
-      await this.gerenciadorAI.gerenciadorArquivos.deleteFile(fileName);
+      if (fileName) {
+        await this.gerenciadorAI.gerenciadorArquivos.deleteFile(fileName);
+      }
     } catch (errDelete) {
       // Apenas log, não propagamos este erro
       this.registrador.warn(`Não foi possível excluir o arquivo remoto: ${errDelete.message}`);
