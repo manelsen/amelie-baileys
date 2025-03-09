@@ -18,3 +18,4 @@ inactive_restart_*
 temp/*
 blocked/*
 package-lock.json
+memoria.sh

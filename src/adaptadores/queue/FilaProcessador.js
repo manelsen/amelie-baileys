@@ -373,7 +373,14 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
     let arquivo;
     try {
       // Tentar usar múltiplas referências de arquivo, priorizando URI se disponível
-      const fileIdentifier = fileUri || fileName;
+      // Certifique-se de usar apenas o identificador do arquivo, não a URL completa
+      let fileIdentifier = fileUri || fileName;
+
+      // Se for uma URL completa, extrair apenas o ID do arquivo
+      if (fileIdentifier.includes('generativelanguage.googleapis.com/v1beta/files/')) {
+        fileIdentifier = fileIdentifier.split('/').pop();
+      }
+
       arquivo = await this.gerenciadorAI.gerenciadorArquivos.getFile(fileIdentifier);
     } catch (erroAcesso) {
       // Se for erro 403, tratamos de forma especial
@@ -562,7 +569,11 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
     // Tentar excluir o arquivo do Google AI em caso de erro - com tratamento de exceção melhorado
     try {
       if (fileName) {
-        await this.gerenciadorAI.gerenciadorArquivos.deleteFile(fileName);
+        let fileId = fileName;
+        if (fileId.includes('generativelanguage.googleapis.com/v1beta/files/')) {
+          fileId = fileId.split('/').pop();
+        }
+        await this.gerenciadorAI.gerenciadorArquivos.deleteFile(fileId);
       }
     } catch (errDelete) {
       // Apenas log, não propagamos este erro
@@ -655,7 +666,11 @@ this.videoAnalysisQueue.process('analyze-video', 3, async (job) => {
     this.limparArquivoTemporario(tempFilename);
     
     // Limpar o arquivo do Google
-    await this.gerenciadorAI.gerenciadorArquivos.deleteFile(fileName);
+    let fileId = fileName;
+    if (fileId.includes('generativelanguage.googleapis.com/v1beta/files/')) {
+      fileId = fileId.split('/').pop();
+    }
+    await this.gerenciadorAI.gerenciadorArquivos.deleteFile(fileId);
     
     return { success: true };
   } catch (erro) {
