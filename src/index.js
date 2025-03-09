@@ -27,7 +27,7 @@ const GerenciadorNotificacoes = require('./adaptadores/whatsapp/GerenciadorNotif
 
 const FilaProcessador = require('./adaptadores/queue/FilaProcessador');
 const GerenciadorTransacoes = require('./adaptadores/transacoes/GerenciadorTransacoes');
-const MonitorSaude = require('./monitoramento/MonitorSaude');
+
 
 // Configurações
 const BOT_NAME = process.env.BOT_NAME || 'Amélie';
@@ -151,7 +151,7 @@ logger.info('🤖 Iniciando Amélie - Assistente Virtual de IA para WhatsApp');
 
 // 1. Inicializar gerenciador de configurações
 const configManager = new ConfigManager(logger, path.join(process.cwd(), 'db'));
-logger.info('✅ Gerenciador de configurações inicializado');
+logger.info('⚙️ Gerenciador de configurações inicializado');
 
 // 2. Inicializar o cliente WhatsApp
 const clienteWhatsApp = new ClienteWhatsApp(logger, {
@@ -159,19 +159,19 @@ const clienteWhatsApp = new ClienteWhatsApp(logger, {
   clienteId: 'principal',
   diretorioTemp: './temp'
 });
-logger.info('✅ Cliente WhatsApp inicializado');
+logger.info('📱 Cliente WhatsApp inicializado');
 
 // 3. Inicializar o gerenciador de notificações
 const gerenciadorNotificacoes = new GerenciadorNotificacoes(logger, './temp');
-logger.info('✅ Gerenciador de notificações inicializado');
+logger.info('🔔 Gerenciador de notificações inicializado');
 
 // 4. Inicializar o gerenciador de IA
 const gerenciadorAI = new GerenciadorAI(logger, API_KEY);
-logger.info('✅ Gerenciador de IA inicializado');
+logger.info('🧠 Gerenciador de IA inicializado');
 
 // 5. Inicializar o gerenciador de transações
 const gerenciadorTransacoes = new GerenciadorTransacoes(logger, path.join(process.cwd(), 'db'));
-logger.info('✅ Gerenciador de transações inicializado');
+logger.info('💼 Gerenciador de transações inicializado');
 
 // 6. Inicializar o processador de filas
 const filaProcessador = new FilaProcessador(
@@ -179,7 +179,7 @@ const filaProcessador = new FilaProcessador(
   gerenciadorAI, 
   clienteWhatsApp
 );
-logger.info('✅ Processador de filas inicializado');
+logger.info('🔄 Processador de filas inicializado');
 
 // 7. Inicializar o gerenciador de mensagens
 const gerenciadorMensagens = new GerenciadorMensagens(
@@ -190,11 +190,11 @@ const gerenciadorMensagens = new GerenciadorMensagens(
   filaProcessador.videoQueue,
   gerenciadorTransacoes
 );
-logger.info('✅ Gerenciador de mensagens inicializado');
+logger.info('💬 Gerenciador de mensagens inicializado');
 
 // 8. Inicializar o monitor de saúde
-const monitorSaude = new MonitorSaude(logger, clienteWhatsApp);
-logger.info('✅ Monitor de saúde inicializado');
+const monitorSaude = require('./monitoramento/MonitorSaude').criar(logger, clienteWhatsApp);
+logger.info('❤️‍🩹 Monitor de saúde inicializado');
 
 // Configurar eventos do cliente WhatsApp
 clienteWhatsApp.on('pronto', async () => {
