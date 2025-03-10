@@ -10,6 +10,8 @@ const qrcode = require('qrcode-terminal');
 const EventEmitter = require('events');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+
 
 class ClienteWhatsApp extends EventEmitter {
   /**
@@ -212,106 +214,121 @@ async enviarMensagem(para, conteudo, opcoes = null) {
   // Verificação básica de prontidão
   const clientePronto = await this.estaProntoRealmente();
   
-  // NOVO: Flag para controlar se devemos tentar reply ou não
-  let tentarReply = true;
-  
-  // NOVO: Verificação de segurança para identificar mensagens após restart
-  if (opcoes && opcoes.isRecoveredMessage) {
-    tentarReply = false; // Nunca tente reply em mensagens recuperadas
-  }
-  
-  // Tentar extrair o ID do destinatário de várias formas possíveis
+  // Extrair o ID do destinatário
   const destinatarioReal = para.includes('@') ? para : `${para}@c.us`;
   
-  // Determinar se estamos lidando com um objeto de mensagem ou opções
+  // Salvar dados da mensagem original imediatamente para recuperação
+  let mensagemOriginalId = null;
   let mensagemOriginal = null;
-  let quotedMessageId = null;
   
+  // Tentar extrair identificadores da mensagem original
   if (opcoes) {
-    if (opcoes.quotedMessageId) {
-      // Novo formato: opções com ID da mensagem para citar
-      quotedMessageId = opcoes.quotedMessageId;
-    } else if (opcoes.reply && typeof opcoes.reply === 'function') {
-      // Formato antigo: objeto de mensagem completo
+    if (opcoes.id && opcoes.id._serialized) {
+      mensagemOriginalId = opcoes.id._serialized;
+    } else if (opcoes.quotedMessageId) {
+      mensagemOriginalId = opcoes.quotedMessageId;
+    }
+    
+    if (typeof opcoes.reply === 'function') {
       mensagemOriginal = opcoes;
     }
   }
-
-  // NOVA VERIFICAÇÃO DE SEGURANÇA: Se estamos após restart, fazer uma abordagem direta
-  if (!clientePronto || !tentarReply) {
-    try {
-      this.registrador.info(`Enviando mensagem direta para ${destinatarioReal} (${tentarReply ? 'cliente não pronto' : 'modo recovery'})`);
-      
-      // Enviar mensagem direta sem tentar responder
-      await this.cliente.sendMessage(destinatarioReal, conteudo);
-      
-      this.ultimoEnvio = Date.now();
-      this.registrador.info(`Mensagem enviada com sucesso (envio direto) para ${destinatarioReal}`);
-      return true;
-    } catch (erroEnvio) {
-      this.registrador.warn(`Falha no envio direto para ${destinatarioReal}, adicionando à fila de pendentes: ${erroEnvio.message}`);
-      
-      this.mensagensPendentes.push({ 
-        para: destinatarioReal, 
-        conteudo, 
-        timestamp: Date.now(),
-        naoUsarReply: true // Marca para não tentar usar reply
-      });
-      
-      await this.salvarNotificacaoPendente(destinatarioReal, conteudo, { naoUsarReply: true });
-      return false;
-    }
-  }
   
-  // Tentar enviar com reply apenas se temos uma mensagem original válida
-  const usarReply = mensagemOriginal && typeof mensagemOriginal.reply === 'function';
-  let tentativas = 0;
-  const maxTentativas = 3;
+  // Armazenar dados para recuperação imediatamente
+  const dadosRecuperacao = {
+    para: destinatarioReal,
+    conteudo,
+    mensagemOriginalId,
+    timestamp: Date.now()
+  };
   
-  while (tentativas < maxTentativas) {
-    try {
-      if (usarReply) {
-        // Tenta responder à mensagem original
-        await mensagemOriginal.reply(conteudo);
-      } else if (quotedMessageId) {
-        // Tenta responder citando a mensagem pelo ID
-        await this.cliente.sendMessage(destinatarioReal, conteudo, { quotedMessageId });
-      } else {
-        // Caso não tenha mensagem original, envia normalmente
-        await this.cliente.sendMessage(destinatarioReal, conteudo);
-      }
-      
-      this.ultimoEnvio = Date.now();
-      this.registrador.debug(`Mensagem enviada com sucesso para ${destinatarioReal}`);
-      return true;
-    } catch (erro) {
-      tentativas++;
-      this.registrador.error(`Erro ao enviar mensagem (tentativa ${tentativas}): ${erro.message}`);
-      
-      // NOVO: Se falhar com reply, tenta sem reply na próxima vez
-      if (erro.message.includes('quoted message') || erro.message.includes('Could not get')) {
-        this.registrador.info(`Erro de mensagem citada, tentando envio direto...`);
+  // Salvar em disco para persistência
+  await this.salvarDadosRecuperacao(dadosRecuperacao);
+  
+  // Estratégia de envio em camadas
+  try {
+    // Primeira tentativa: envio direto sem citação (mais confiável)
+    this.registrador.info(`Tentando envio direto para ${destinatarioReal}`);
+    
+    await this.cliente.sendMessage(destinatarioReal, conteudo);
+    this.ultimoEnvio = Date.now();
+    
+    // Marcar como sucesso e limpar dados de recuperação
+    await this.limparDadosRecuperacao(dadosRecuperacao.id);
+    return true;
+  } catch (erroEnvioSimples) {
+    this.registrador.warn(`Falha no envio direto: ${erroEnvioSimples.message}`);
+    
+    // Segunda tentativa: tentar com reply se disponível
+    if (mensagemOriginal && typeof mensagemOriginal.reply === 'function') {
+      try {
+        this.registrador.info(`Tentando envio com reply para ${destinatarioReal}`);
         
-        try {
-          // Tenta enviar diretamente sem citação
-          await this.cliente.sendMessage(destinatarioReal, conteudo);
-          
-          this.ultimoEnvio = Date.now();
-          this.registrador.info(`Mensagem enviada com sucesso (sem citação) para ${destinatarioReal}`);
-          return true;
-        } catch (erroSimples) {
-          this.registrador.error(`Falha também no envio simples: ${erroSimples.message}`);
+        await mensagemOriginal.reply(conteudo);
+        this.ultimoEnvio = Date.now();
+        
+        // Marcar como sucesso e limpar dados de recuperação
+        await this.limparDadosRecuperacao(dadosRecuperacao.id);
+        return true;
+      } catch (erroReply) {
+        this.registrador.error(`Falha no envio com reply: ${erroReply.message}`);
+        
+        // Terceira tentativa: tentar com citação via ID
+        if (mensagemOriginalId) {
+          try {
+            await this.cliente.sendMessage(destinatarioReal, conteudo, {
+              quotedMessageId: mensagemOriginalId
+            });
+            this.ultimoEnvio = Date.now();
+            
+            // Marcar como sucesso e limpar dados de recuperação
+            await this.limparDadosRecuperacao(dadosRecuperacao.id);
+            return true;
+          } catch (erroCitacao) {
+            this.registrador.error(`Todas as tentativas falharam: ${erroCitacao.message}`);
+          }
         }
       }
-      
-      if (tentativas >= maxTentativas) {
-        // Salvar para tentativa futura, marcando para não usar reply
-        await this.salvarNotificacaoPendente(destinatarioReal, conteudo, { naoUsarReply: true });
-        throw erro;
-      }
-      
-      await new Promise(resolve => setTimeout(resolve, 2000));
     }
+    
+    // Fallback: adicionar à fila de pendentes
+    this.registrador.warn(`Adicionando mensagem à fila de pendentes para ${destinatarioReal}`);
+    
+    this.mensagensPendentes.push({ 
+      para: destinatarioReal, 
+      conteudo, 
+      mensagemOriginalId,
+      timestamp: Date.now()
+    });
+    
+    // Os dados já foram salvos no início, não precisamos salvar novamente
+    return false;
+  }
+}
+
+// Funções auxiliares para persistência
+async salvarDadosRecuperacao(dados) {
+  try {
+    const id = crypto.randomBytes(8).toString('hex');
+    dados.id = id;
+    
+    const caminhoArquivo = path.join(this.diretorioTemp, `mensagem_${id}.json`);
+    await fs.promises.writeFile(caminhoArquivo, JSON.stringify(dados), 'utf8');
+    
+    return id;
+  } catch (erro) {
+    this.registrador.error(`Erro ao salvar dados de recuperação: ${erro.message}`);
+  }
+}
+
+async limparDadosRecuperacao(id) {
+  try {
+    const caminhoArquivo = path.join(this.diretorioTemp, `mensagem_${id}.json`);
+    if (fs.existsSync(caminhoArquivo)) {
+      await fs.promises.unlink(caminhoArquivo);
+    }
+  } catch (erro) {
+    this.registrador.error(`Erro ao limpar dados de recuperação: ${erro.message}`);
   }
 }
 
@@ -363,6 +380,41 @@ async enviarMensagem(para, conteudo, opcoes = null) {
     this.mensagensPendentes = novasPendentes;
     return enviadas;
   }
+  
+  async recuperarMensagensPendentes() {
+  try {
+    const arquivos = await fs.promises.readdir(this.diretorioTemp);
+    const arquivosMensagens = arquivos.filter(f => f.startsWith('mensagem_') && f.endsWith('.json'));
+    
+    let recuperadas = 0;
+    
+    for (const arquivo of arquivosMensagens) {
+      try {
+        const caminhoCompleto = path.join(this.diretorioTemp, arquivo);
+        const conteudo = await fs.promises.readFile(caminhoCompleto, 'utf8');
+        const dados = JSON.parse(conteudo);
+        
+        // Tentar enviar a mensagem pendente
+        await this.cliente.sendMessage(dados.para, dados.conteudo);
+        
+        // Remover o arquivo após envio bem-sucedido
+        await fs.promises.unlink(caminhoCompleto);
+        recuperadas++;
+      } catch (erro) {
+        this.registrador.error(`Erro ao recuperar mensagem pendente ${arquivo}: ${erro.message}`);
+      }
+    }
+    
+    if (recuperadas > 0) {
+      this.registrador.info(`${recuperadas} mensagens recuperadas após reinicialização`);
+    }
+    
+    return recuperadas;
+  } catch (erro) {
+    this.registrador.error(`Erro ao recuperar mensagens pendentes: ${erro.message}`);
+    return 0;
+  }
+}
 
 /**
  * Salva uma notificação para envio posterior

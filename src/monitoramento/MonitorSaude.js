@@ -9,6 +9,8 @@
 const fs = require('fs');
 const path = require('path');
 
+// ======= FUNÇÕES PURAS =======
+
 /**
  * Cria configurações padrão mescladas com opções fornecidas
  * @param {Object} opcoes - Opções de configuração
@@ -374,9 +376,9 @@ const executarBatimento = async (estado) => {
     // A cada 10 batimentos, mostra estatísticas
     if (novoContadorBatimentos % 10 === 0) {
       const minutosAtivo = Math.floor((agora - timestamps.inicioSistema) / 1000 / 60);
-      registrador.info(`💓 #${novoContadorBatimentos} - Sistema ativo há ${minutosAtivo}min`);
+      registrador.info(`💓 #${novoContadorBatimentos} - Amélie ativa há ${minutosAtivo}min`);
     } else {
-      registrador.info(`💓 ${new Date().toISOString()} - Sistema ativo`);
+      registrador.info(`💓 ${new Date().toISOString()} - Amélie ativa`);
     }
     
     // Verificar uso de memória ocasionalmente
@@ -435,15 +437,49 @@ const recuperacaoEmergencia = async (estado) => {
     // 2. Salvar estado crítico para análise posterior
     salvarEstadoCritico(estado);
     
-    // 3. NOVO: Limpar arquivos de bloqueio do Chrome antes de tentar reiniciar
+    // 3. NOVO: Limpar arquivos de bloqueio do Chrome com verificações de segurança
     try {
-      // Verificar e remover arquivos de bloqueio do Chrome
-      const diretorioPerfil = path.join(process.cwd(), '.wwebjs_auth/session-principal');
-      const arquivoLock = path.join(diretorioPerfil, 'SingletonLock');
+      // Verificar se há outras instâncias ativas do Chrome antes de limpar
+      const verificarChromeAtivo = () => {
+        try {
+          // No Linux/Mac, podemos usar o comando ps
+          const resultado = require('child_process').execSync('ps aux | grep chrome | grep -v grep').toString();
+          const linhas = resultado.split('\n').filter(Boolean);
+          
+          // Se encontrar mais de uma linha com chrome (além do nosso), pode ter outras instâncias
+          if (linhas.length > 1) {
+            registrador.warn('⚠️ Detectadas possíveis instâncias ativas de Chrome! Removendo bloqueios com cautela.');
+            return true;
+          }
+          return false;
+        } catch (e) {
+          // Se o comando falhar, provavelmente não há chrome rodando
+          return false;
+        }
+      };
       
+      const diretorioPerfil = path.join(process.cwd(), '.wwebjs_auth/session-principal');
+      
+      // Verificar se existem outros browsers ativos
+      const chromeAtivo = verificarChromeAtivo();
+      if (chromeAtivo) {
+        registrador.warn('🔍 Outras instâncias do Chrome podem estar ativas. Aguardando 5 segundos...');
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+      
+      // Tratar o arquivo principal de bloqueio
+      const arquivoLock = path.join(diretorioPerfil, 'SingletonLock');
       if (fs.existsSync(arquivoLock)) {
-        registrador.info('🔓 Removendo arquivo de bloqueio do Chrome...');
-        fs.unlinkSync(arquivoLock);
+        const stats = fs.statSync(arquivoLock);
+        const idadeArquivoSegundos = (Date.now() - stats.mtimeMs) / 1000;
+        
+        // Só remover se o arquivo tiver mais de 30 segundos 
+        if (idadeArquivoSegundos > 30) {
+          registrador.info(`🔓 Removendo arquivo de bloqueio do Chrome (idade: ${Math.round(idadeArquivoSegundos)}s)...`);
+          fs.unlinkSync(arquivoLock);
+        } else {
+          registrador.warn(`⚠️ Arquivo de bloqueio parece recente (${Math.round(idadeArquivoSegundos)}s). Não vou remover.`);
+        }
       }
       
       // Verificar outros arquivos que podem causar problemas
@@ -461,8 +497,17 @@ const recuperacaoEmergencia = async (estado) => {
           
           for (const arquivo of arquivosParaRemover) {
             try {
-              fs.unlinkSync(path.join(diretorioPerfil, arquivo));
-              registrador.info(`🔓 Removido arquivo de bloqueio: ${arquivo}`);
+              const caminhoArquivo = path.join(diretorioPerfil, arquivo);
+              const stats = fs.statSync(caminhoArquivo);
+              const idadeArquivoSegundos = (Date.now() - stats.mtimeMs) / 1000;
+              
+              // Só remover se o arquivo tiver mais de 30 segundos
+              if (idadeArquivoSegundos > 30) {
+                fs.unlinkSync(caminhoArquivo);
+                registrador.info(`🔓 Removido arquivo de bloqueio: ${arquivo} (idade: ${Math.round(idadeArquivoSegundos)}s)`);
+              } else {
+                registrador.warn(`⚠️ Arquivo ${arquivo} parece recente (${Math.round(idadeArquivoSegundos)}s). Não vou remover.`);
+              }
             } catch (e) {
               registrador.debug(`Não foi possível remover ${arquivo}: ${e.message}`);
             }
@@ -483,7 +528,8 @@ const recuperacaoEmergencia = async (estado) => {
     }
     
     // 5. Aguardar um momento para garantir que todos os processos foram encerrados
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    registrador.info('Aguardando 3 segundos para garantir que processos terminem...');
+    await new Promise(resolve => setTimeout(resolve, 3000));
     
     // 6. Reiniciar completamente o cliente
     registrador.info('Forçando reinício completo do cliente...');
@@ -498,7 +544,7 @@ const recuperacaoEmergencia = async (estado) => {
         falhasConsecutivas: 0
       },
       timestamps: {
-        ...estado.timestamps,
+        ...timestamps,
         ultimoBatimento: Date.now(),
         ultimaAtividadeSistema: Date.now()
       },
@@ -512,6 +558,9 @@ const recuperacaoEmergencia = async (estado) => {
     
     // Tentar limpar recursos de forma mais agressiva
     try {
+      // Aguardar mais um pouco antes das medidas extremas
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
       // Limpar diretório de cache do Chrome como último recurso
       const diretorioCache = path.join(process.cwd(), '.wwebjs_auth/session-principal/Default/Cache');
       if (fs.existsSync(diretorioCache)) {
