@@ -425,7 +425,7 @@ const executarBatimento = async (estado) => {
 const recuperacaoEmergencia = async (estado) => {
   const { registrador, clienteWhatsApp } = estado;
   
-  registrador.error('🚨 INICIANDO PROCEDIMENTO DE RECUPERAÇÃO DE EMERGÊNCIA 🚨');
+  registrador.error('🚨 Procedimento de Recuperação de Emergência 🚨');
   
   try {
     // 1. Forçar liberação de memória
@@ -521,6 +521,10 @@ const recuperacaoEmergencia = async (estado) => {
     // 4. Tentar matar e reiniciar o cliente diretamente
     if (clienteWhatsApp.cliente && clienteWhatsApp.cliente.pupBrowser) {
       try {
+
+        // JERÔNIMO! MATA O CHROME!
+
+        require('child_process').execSync(`pkill -f "chrome.*${process.cwd()}/.wwebjs_auth/session-principal"`);
         await clienteWhatsApp.cliente.pupBrowser.close().catch(() => {});
       } catch (err) {
         registrador.error(`Não foi possível fechar o navegador: ${err.message}`);
