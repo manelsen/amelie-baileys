@@ -1009,9 +1009,21 @@ async verificarMencaoBotNaMensagem(msg) {
       const remetente = await this.obterOuCriarUsuario(msg.author || msg.from, chat);
       
       if (!config.mediaVideo) {
-        this.registrador.info(`Descrição de vídeo desabilitada para o chat ${chatId}. Ignorando mensagem de vídeo.`);
+        this.registrador.debug(`Descrição de vídeo desabilitada para o chat ${chatId}. Ignorando mensagem de vídeo.`);
         return false;
       }
+    
+    const tamanhoVideoMB = videoData.data.length / (1024 * 1024);
+    if (tamanhoVideoMB > 20) {
+      // Usando nosso serviço de mensagem centralizado
+      await this.servicoMensagem.enviarResposta(
+        msg, 
+        "Desculpe, só posso processar vídeos de até 20MB. Este vídeo é muito grande para eu analisar."
+      );
+      
+      this.registrador.warn(`Vídeo muito grande (${tamanhoVideoMB.toFixed(2)}MB) recebido de ${remetente.name}. Processamento rejeitado.`);
+      return false;
+    }
       
       // Criar transação para esta mensagem de vídeo
       const transacao = await this.gerenciadorTransacoes.criarTransacao(msg, chat);
