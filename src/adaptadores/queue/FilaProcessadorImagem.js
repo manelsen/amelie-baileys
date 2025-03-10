@@ -81,69 +81,6 @@ class FilaProcessadorImagem {
   }
 
   /**
-   * Salva arquivo bloqueado por segurança para análise posterior
-   * @param {Object} imagemData - Dados da imagem
-   * @param {Object} dados - Dados do job e do erro
-   * @returns {Promise<boolean>} Sucesso da operação
-   */
-  async salvarImagemBloqueada(imagemData, dados) {
-    try {
-      // Criar diretório blocked se não existir
-      const diretorioBlocked = path.join(process.cwd(), 'blocked');
-      if (!fs.existsSync(diretorioBlocked)) {
-        fs.mkdirSync(diretorioBlocked, { recursive: true });
-        this.registrador.info(`Diretório para arquivos bloqueados criado: ${diretorioBlocked}`);
-      }
-      
-      // Gerar nome único para o arquivo
-      const timestamp = new Date().toISOString().replace(/[:.-]/g, '_');
-      const hashImagem = crypto.createHash('md5').update(imagemData.data).digest('hex');
-      const nomeArquivoBloqueado = `blocked_image_${hashImagem}_${timestamp}.jpg`;
-      const caminhoArquivoBloqueado = path.join(diretorioBlocked, nomeArquivoBloqueado);
-      
-      // Salvar a imagem
-      const buffer = Buffer.from(imagemData.data, 'base64');
-      fs.writeFileSync(caminhoArquivoBloqueado, buffer);
-      
-      // Criar objeto de metadados
-      const metadados = {
-        arquivoBloqueado: caminhoArquivoBloqueado,
-        timestamp: new Date().toISOString(),
-        tipoArquivo: imagemData.mimetype || 'image/jpeg',
-        erro: dados.erro || 'Erro desconhecido',
-        remetente: {
-          id: dados.senderNumber || 'desconhecido',
-        },
-        grupo: dados.chatId?.endsWith('@g.us') ? {
-          id: dados.chatId,
-        } : null,
-        mensagem: {
-          id: dados.messageId || 'desconhecido',
-          prompt: dados.userPrompt || '',
-        },
-        transacaoId: dados.transacaoId || 'desconhecido'
-      };
-      
-      // Salvar metadados em um arquivo JSON
-      const nomeArquivoMetadados = `${path.basename(nomeArquivoBloqueado, '.jpg')}.json`;
-      const caminhoArquivoMetadados = path.join(diretorioBlocked, nomeArquivoMetadados);
-      fs.writeFileSync(
-        caminhoArquivoMetadados,
-        JSON.stringify(metadados, null, 2),
-        'utf8'
-      );
-      
-      this.registrador.warn(`⚠️ Imagem bloqueada por segurança salva em: ${caminhoArquivoBloqueado}`);
-      this.registrador.warn(`⚠️ Metadados da imagem bloqueada salvos em: ${caminhoArquivoMetadados}`);
-      
-      return true;
-    } catch (erro) {
-      this.registrador.error(`Erro ao salvar imagem bloqueada: ${erro.message}`);
-      return false;
-    }
-  }
-
-  /**
   * Obtém configurações para processamento de imagem diretamente do banco de dados
   * @param {string} chatId - ID do chat específico para obter a configuração
   * @returns {Promise<Object>} Configurações do processamento
@@ -337,18 +274,8 @@ class FilaProcessadorImagem {
         // Verificar se é um erro de segurança
         if (erro.message.includes('SAFETY') || erro.message.includes('safety') || 
             erro.message.includes('blocked') || erro.message.includes('Blocked')) {
-          await this.salvarImagemBloqueada(imageData, {
-            mimeType,
-            erro: erro.message,
-            senderNumber,
-            chatId,
-            messageId,
-            userPrompt,
-            transacaoId,
-            jobId: job.id
-          });
-          
-          // Notificar via callback
+
+              // Notificar via callback
           if (this.respostaCallback) {
             this.respostaCallback({
               resposta: "Este conteúdo não pôde ser processado por questões de segurança.",
@@ -401,16 +328,6 @@ class FilaProcessadorImagem {
         // Verificar se é um erro de segurança
         if (erro.message.includes('SAFETY') || erro.message.includes('safety') || 
             erro.message.includes('blocked') || erro.message.includes('Blocked')) {
-          await this.salvarImagemBloqueada(imageData, {
-            mimeType,
-            erro: erro.message,
-            senderNumber,
-            chatId,
-            messageId,
-            userPrompt,
-            transacaoId,
-            jobId: job.id
-          });
           
           // Notificar via callback
           if (this.respostaCallback) {
@@ -500,17 +417,6 @@ prepararPromptUsuario(promptUsuario, modoDescricao = 'curto') {
     queue.on('failed', (job, error) => {
       const duracao = Date.now() - (job.processedOn || job.timestamp);
       this.registrador.error(`[${nomeEtapa}] Job ${job.id} falhou após ${duracao}ms: ${error.message}`);
-      
-      // Verificar se é um erro de segurança
-      if (job.data && job.data.imageData && (error.message.includes('SAFETY') || error.message.includes('safety'))) {
-        this.salvarImagemBloqueada(job.data.imageData, {
-          ...job.data,
-          erro: error.message,
-          jobId: job.id
-        }).catch(err => {
-          this.registrador.error(`Erro ao salvar imagem bloqueada: ${err.message}`);
-        });
-      }
       
       // Registrar falhas na fila de problemas para análise posterior
       this.problemImagesQueue.add('failed-job', {

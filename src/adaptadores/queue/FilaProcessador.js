@@ -111,78 +111,7 @@ constructor(registrador, gerenciadorAI, clienteWhatsApp, opcoes = {}) {
       this.registrador.warn(`🔥 Event loop crítico! Lag atual: ${currentLag}ms`);
     });
   }
-
-  /**
-   * Salva arquivo bloqueado por segurança para análise posterior
-   * @param {string} caminhoArquivo - Caminho do arquivo original
-   * @param {Object} dados - Dados do job e do erro
-   * @returns {Promise<boolean>} Sucesso da operação
-   */
-  async salvarArquivoBloqueado(caminhoArquivo, dados) {
-    try {
-      // Criar diretório blocked se não existir
-      const diretorioBlocked = path.join(process.cwd(), 'blocked');
-      if (!fs.existsSync(diretorioBlocked)) {
-        fs.mkdirSync(diretorioBlocked, { recursive: true });
-        this.registrador.info(`Diretório para arquivos bloqueados criado: ${diretorioBlocked}`);
-      }
-      
-      // Verificar se o arquivo existe
-      if (!fs.existsSync(caminhoArquivo)) {
-        this.registrador.warn(`Arquivo ${caminhoArquivo} não existe para ser salvo como bloqueado`);
-        return false;
-      }
-      
-      // Gerar nome único para o arquivo
-      const extensao = path.extname(caminhoArquivo);
-      const timestamp = new Date().toISOString().replace(/[:.-]/g, '_');
-      const nomeArquivoBloqueado = `blocked_${timestamp}${extensao}`;
-      const caminhoArquivoBloqueado = path.join(diretorioBlocked, nomeArquivoBloqueado);
-      
-      // Copiar o arquivo
-      fs.copyFileSync(caminhoArquivo, caminhoArquivoBloqueado);
-      
-      // Criar objeto de metadados
-      const metadados = {
-        arquivoOriginal: caminhoArquivo,
-        arquivoBloqueado: caminhoArquivoBloqueado,
-        timestamp: new Date().toISOString(),
-        tipoArquivo: dados.mimeType || 'desconhecido',
-        erro: dados.erro || 'Erro desconhecido',
-        remetente: {
-          id: dados.senderNumber || 'desconhecido',
-          // Outras informações do remetente podem ser adicionadas aqui
-        },
-        grupo: dados.chatId?.endsWith('@g.us') ? {
-          id: dados.chatId,
-          // Outras informações do grupo podem ser adicionadas aqui
-        } : null,
-        mensagem: {
-          id: dados.messageId || 'desconhecido',
-          prompt: dados.userPrompt || '',
-        },
-        transacaoId: dados.transacaoId || 'desconhecido'
-      };
-      
-      // Salvar metadados em um arquivo JSON
-      const nomeArquivoMetadados = `${path.basename(nomeArquivoBloqueado, extensao)}.json`;
-      const caminhoArquivoMetadados = path.join(diretorioBlocked, nomeArquivoMetadados);
-      fs.writeFileSync(
-        caminhoArquivoMetadados,
-        JSON.stringify(metadados, null, 2),
-        'utf8'
-      );
-      
-      this.registrador.warn(`⚠️ Arquivo bloqueado por segurança salvo em: ${caminhoArquivoBloqueado}`);
-      this.registrador.warn(`⚠️ Metadados do arquivo bloqueado salvos em: ${caminhoArquivoMetadados}`);
-      
-      return true;
-    } catch (erro) {
-      this.registrador.error(`Erro ao salvar arquivo bloqueado: ${erro.message}`);
-      return false;
-    }
-  }
-
+  
   /**
  * Obtém configurações para processamento de vídeo diretamente do banco de dados
  * @param {string} chatId - ID do chat específico para obter a configuração
@@ -261,17 +190,6 @@ this.videoUploadQueue.process('upload-video', 3, async (job) => {
     // Verificar se é um erro de segurança
     if (erro.message.includes('SAFETY') || erro.message.includes('safety') || 
         erro.message.includes('blocked') || erro.message.includes('Blocked')) {
-      await this.salvarArquivoBloqueado(tempFilename, {
-        mimeType,
-        erro: erro.message,
-        senderNumber,
-        chatId,
-        messageId,
-        userPrompt,
-        transacaoId,
-        jobId: job.id
-      });
-      
       // Notificar via callback ou diretamente
       if (this.resultCallback) {
         this.resultCallback({
@@ -487,17 +405,6 @@ this.videoProcessingCheckQueue.process('check-processing', 3, async (job) => {
     // Verificar se é um erro de segurança
     if (erro.message.includes('SAFETY') || erro.message.includes('safety') || 
         erro.message.includes('blocked') || erro.message.includes('Blocked')) {
-      await this.salvarArquivoBloqueado(tempFilename, {
-        mimeType,
-        erro: erro.message,
-        senderNumber,
-        chatId,
-        messageId,
-        userPrompt,
-        transacaoId,
-        jobId: job.id
-      });
-      
       // Notificar via callback ou diretamente
       if (this.resultCallback) {
         this.resultCallback({
@@ -679,17 +586,6 @@ this.videoAnalysisQueue.process('analyze-video', 3, async (job) => {
     // Verificar se é um erro de segurança
     if (erro.message.includes('SAFETY') || erro.message.includes('safety') || 
         erro.message.includes('blocked') || erro.message.includes('Blocked')) {
-      await this.salvarArquivoBloqueado(tempFilename, {
-        mimeType,
-        erro: erro.message,
-        senderNumber,
-        chatId,
-        messageId,
-        userPrompt,
-        transacaoId,
-        jobId: job.id
-      });
-      
       // Notificar via callback ou diretamente
       if (this.resultCallback) {
         this.resultCallback({
@@ -761,22 +657,6 @@ this.videoAnalysisQueue.process('analyze-video', 3, async (job) => {
         return { success: true, redirectedJobId: uploadJob.id };
       } catch (erro) {
         this.registrador.error(`Erro ao redirecionar vídeo: ${erro.message}`, { erro, jobId: job.id });
-        
-        // Verificar se é um erro de segurança
-        if (erro.message.includes('SAFETY') || erro.message.includes('safety') || 
-            erro.message.includes('blocked') || erro.message.includes('Blocked')) {
-          await this.salvarArquivoBloqueado(tempFilename, {
-            mimeType,
-            erro: erro.message,
-            senderNumber,
-            chatId,
-            messageId,
-            userPrompt,
-            transacaoId,
-            jobId: job.id
-          });
-        }
-        
         throw erro;
       }
     });
@@ -811,17 +691,6 @@ configurarEventosQueue(queue, nomeEtapa) {
       const duracao = Date.now() - (job.processedOn || job.timestamp);
       this.registrador.error(`[${nomeEtapa}] Job ${job.id} falhou após ${duracao}ms: ${error.message}`);
       
-      // Verificar se é um erro de segurança
-      if (job.data && job.data.tempFilename && (error.message.includes('SAFETY') || error.message.includes('safety'))) {
-        this.salvarArquivoBloqueado(job.data.tempFilename, {
-          ...job.data,
-          erro: error.message,
-          jobId: job.id
-        }).catch(err => {
-          this.registrador.error(`Erro ao salvar arquivo bloqueado: ${err.message}`);
-        });
-      }
-
       // Registrar falhas na fila de problemas para análise posterior
       this.problemVideosQueue.add('failed-job', {
         etapa: nomeEtapa,
@@ -1166,7 +1035,7 @@ configurarEventosQueue(queue, nomeEtapa) {
         jobs.map(j => ({
           id: j.id,
           queue: name,
-          data: { ...j.data, tempFilename: '***' }, // Ocultar caminho completo por segurança
+          data: { ...j.data, tempFilename: '***' },
           processedOn: j.processedOn
         }))
       );
@@ -1189,7 +1058,7 @@ configurarEventosQueue(queue, nomeEtapa) {
         jobs.map(j => ({
           id: j.id,
           queue: name,
-          data: { ...j.data, tempFilename: '***' }, // Ocultar caminho completo por segurança
+          data: { ...j.data, tempFilename: '***' },
           failedReason: j.failedReason,
           stacktrace: j.stacktrace,
           attemptsMade: j.attemptsMade
