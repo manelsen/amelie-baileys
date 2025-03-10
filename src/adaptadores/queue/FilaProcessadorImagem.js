@@ -314,12 +314,11 @@ class FilaProcessadorImagem {
       try {
         this.registrador.info(`Processando imagem através da fila principal (Job ${job.id})`);
         
-        // Redirecionar para o novo fluxo de processamento em estágios
         const uploadJob = await this.imageUploadQueue.add('upload-image', {
           imageData, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId, remetenteName
         });
         
-        this.registrador.info(`Imagem redirecionada para o novo fluxo, job ID: ${uploadJob.id}`);
+        this.registrador.info(`Imagem inserida no fluxo, job ID: ${uploadJob.id}`);
         
         return { success: true, redirectedJobId: uploadJob.id };
       } catch (erro) {

@@ -326,7 +326,7 @@ configurarCallbacksProcessamento() {
    */
   async processarComando(msg, chatId) {
     const [comando, ...args] = msg.body.slice(1).split(' ');
-    this.registrador.info(`Comando: ${comando}, Argumentos: ${args}`);
+    this.registrador.debug(`Comando: ${comando}, Argumentos: ${args}`);
     
     try {
       switch (comando.toLowerCase()) {
@@ -979,7 +979,7 @@ async processarMensagemAudio(msg, audioData, chatId) {
         timeout: 60000 // 1 minuto
       });
       
-      this.registrador.info(`🚀 Imagem de ${remetente.name} adicionada à fila com sucesso (transação ${transacao.id})`);
+      this.registrador.debug(`🚀 Imagem de ${remetente.name} na fila - transação ${transacao.id}`);
       return true;
       
     } catch (erro) {
@@ -1103,7 +1103,7 @@ Crie uma descrição organizada e acessível.`;
       const trabalhoId = `video_${chatId}_${Date.now()}`;
       
       try {
-        this.registrador.info(`Salvando arquivo de vídeo ${arquivoTemporario}...`);
+        this.registrador.debug(`Salvando arquivo de vídeo ${arquivoTemporario}...`);
         const videoBuffer = Buffer.from(videoData.data, 'base64');
         
         await fs.promises.writeFile(arquivoTemporario, videoBuffer);
