@@ -30,8 +30,50 @@ constructor(registrador, clienteWhatsApp, gerenciadorConfig, gerenciadorAI, fila
   this.gerenciadorAI = gerenciadorAI;
   this.filaProcessamento = filaProcessamento;
   this.gerenciadorTransacoes = gerenciadorTransacoes;
+  
+  // CORRIGIDO: Implementação direta do servicoMensagem para evitar recursão
   this.servicoMensagem = servicoMensagem || { 
-    enviarResposta: this.enviarResposta.bind(this) // Fallback para compatibilidade
+    enviarResposta: async (mensagemOriginal, texto, transacaoId) => {
+      try {
+        if (!texto || typeof texto !== 'string' || texto.trim() === '') {
+          this.registrador.error('Tentativa de enviar mensagem inválida:', { texto });
+          texto = "Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente.";
+        }
+
+        // Verificação básica de segurança
+        if (!mensagemOriginal || typeof mensagemOriginal.reply !== 'function') {
+          const destinatario = mensagemOriginal?.from || mensagemOriginal?.author;
+          
+          if (!destinatario) {
+            throw new Error("Impossível determinar destinatário para resposta");
+          }
+          
+          return await this.clienteWhatsApp.enviarMensagem(destinatario, texto);
+        }
+
+        // Usar diretamente o método reply
+        await mensagemOriginal.reply(texto);
+        return true;
+      } catch (erro) {
+        this.registrador.error(`Erro ao enviar resposta direta: ${erro.message}`, { erro });
+        
+        // Tentar salvar como notificação pendente
+        try {
+          if (mensagemOriginal && mensagemOriginal.from) {
+            await this.clienteWhatsApp.salvarNotificacaoPendente(
+              mensagemOriginal.from, 
+              texto, 
+              { transacaoId }
+            );
+            this.registrador.info(`Mensagem salva como notificação pendente`);
+          }
+        } catch (erroSalvar) {
+          this.registrador.error(`Falha ao salvar notificação pendente: ${erroSalvar.message}`);
+        }
+        
+        return false;
+      }
+    }
   };
   
   // Inicializar a fila de processamento, mas não delegar responsabilidades de resposta
@@ -259,7 +301,7 @@ configurarCallbacksProcessamento() {
       this.registrador.error(`Erro ao processar mensagem: ${erro.message}`, { erro });
       
       try {
-        await this.servicoMensagem.enviarResposta('Desculpe, ocorreu um erro inesperado. Por favor, tente novamente mais tarde.');
+        await this.servicoMensagem.enviarResposta(msg, 'Desculpe, ocorreu um erro inesperado. Por favor, tente novamente mais tarde.');
       } catch (erroResposta) {
         this.registrador.error(`Não consegui enviar mensagem de erro: ${erroResposta.message}`);
       }
@@ -283,7 +325,7 @@ configurarCallbacksProcessamento() {
         case 'reset':
           await this.gerenciadorConfig.resetarConfig(chatId);
           await this.gerenciadorConfig.limparPromptSistemaAtivo(chatId);
-          await this.servicoMensagem.enviarResposta('Configurações resetadas para este chat. As transcrições de áudio e imagem foram habilitadas, e os prompts especiais foram desativados.');
+          await this.servicoMensagem.enviarResposta(msg, 'Configurações resetadas para este chat. As transcrições de áudio e imagem foram habilitadas, e os prompts especiais foram desativados.');
           return true;
 
         case 'ajuda':
@@ -318,7 +360,7 @@ Se quiser conhecer, fala com ela em https://beacons.ai/belleutsch
 Quer entrar no grupo oficial da Amélie? O link é https://chat.whatsapp.com/C0Ys7pQ6lZH5zqDD9A8cLp
 Meu repositório fica em https://github.com/manelsen/amelie`;
           
-          await msg.reply(textoAjuda);
+          await this.servicoMensagem.enviarResposta(msg, textoAjuda);
           return true;
 
         case 'prompt':
@@ -362,12 +404,12 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
           return true;
 
         default:
-          await this.servicoMensagem.enviarResposta('Comando desconhecido. Use .ajuda para ver os comandos disponíveis.');
+          await this.servicoMensagem.enviarResposta(msg, 'Comando desconhecido. Use .ajuda para ver os comandos disponíveis.');
           return false;
       }
     } catch (erro) {
       this.registrador.error(`Erro ao processar comando: ${erro.message}`, { erro });
-      await this.servicoMensagem.enviarResposta('Desculpe, ocorreu um erro ao processar seu comando.');
+      await this.servicoMensagem.enviarResposta(msg, 'Desculpe, ocorreu um erro ao processar seu comando.');
       return false;
     }
   }
@@ -382,7 +424,7 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
     const ehAdministrador = true; // Mudar isso para sua lógica de verificação de administrador
     
     if (!ehAdministrador) {
-      await this.servicoMensagem.enviarResposta('❌ Desculpe, apenas administradores podem gerenciar as filas.');
+      await this.servicoMensagem.enviarResposta(msg, '❌ Desculpe, apenas administradores podem gerenciar as filas.');
       return;
     }
     
@@ -402,16 +444,16 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
         } else if (tipoFila === 'imagem' || tipoFila === 'imagens' || tipoFila === 'image') {
           relatorio = await this.filaProcessamentoImagem.getFormattedQueueStatus();
         } else {
-          await this.servicoMensagem.enviarResposta('Tipo de fila inválido. Use: todas, video ou imagem');
+          await this.servicoMensagem.enviarResposta(msg, 'Tipo de fila inválido. Use: todas, video ou imagem');
           return;
         }
         
-        await this.servicoMensagem.enviarResposta(relatorio);
+        await this.servicoMensagem.enviarResposta(msg, relatorio);
         break;
         
       case 'limpar':
         if (!tipoFila) {
-          await this.servicoMensagem.enviarResposta('Especifique o tipo de fila para limpar: todas, video ou imagem');
+          await this.servicoMensagem.enviarResposta(msg, 'Especifique o tipo de fila para limpar: todas, video ou imagem');
           return;
         }
         
@@ -421,25 +463,25 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
           ? 'Limpando apenas trabalhos concluídos e falhas...' 
           : '⚠️ ATENÇÃO: Isso vai limpar TODAS as filas, incluindo trabalhos em andamento!';
         
-        await msg.reply(avisoLimpeza);
+        await this.servicoMensagem.enviarResposta(msg, avisoLimpeza);
         
         if (tipoFila === 'all' || tipoFila === 'todas') {
           const resultadoVideo = await this.filaProcessamento.limparFilas(apenasCompletos);
           const resultadoImagem = await this.filaProcessamentoImagem.limparFilas(apenasCompletos);
-          await msg.reply(`✅ Limpeza concluída!\nVídeos: ${JSON.stringify(resultadoVideo)}\nImagens: ${JSON.stringify(resultadoImagem)}`);
+          await this.servicoMensagem.enviarResposta(msg, `✅ Limpeza concluída!\nVídeos: ${JSON.stringify(resultadoVideo)}\nImagens: ${JSON.stringify(resultadoImagem)}`);
         } else if (tipoFila === 'video' || tipoFila === 'videos') {
           const resultado = await this.filaProcessamento.limparFilas(apenasCompletos);
-          await msg.reply(`✅ Limpeza de filas de vídeo concluída: ${JSON.stringify(resultado)}`);
+          await this.servicoMensagem.enviarResposta(msg, `✅ Limpeza de filas de vídeo concluída: ${JSON.stringify(resultado)}`);
         } else if (tipoFila === 'imagem' || tipoFila === 'imagens' || tipoFila === 'image') {
           const resultado = await this.filaProcessamentoImagem.limparFilas(apenasCompletos);
-          await msg.reply(`✅ Limpeza de filas de imagem concluída: ${JSON.stringify(resultado)}`);
+          await this.servicoMensagem.enviarResposta(msg, `✅ Limpeza de filas de imagem concluída: ${JSON.stringify(resultado)}`);
         } else {
-          await msg.reply('Tipo de fila inválido. Use: todas, video ou imagem');
+          await this.servicoMensagem.enviarResposta(msg, 'Tipo de fila inválido. Use: todas, video ou imagem');
         }
         break;
         
       default:
-        await msg.reply(`Comando de filas desconhecido. Use:
+        await this.servicoMensagem.enviarResposta(msg, `Comando de filas desconhecido. Use:
 .filas status [todas|video|imagem] - Mostra status das filas
 .filas limpar [todas|video|imagem] [tudo] - Limpa filas (use 'tudo' para limpar mesmo trabalhos em andamento)`);
     }
@@ -524,13 +566,13 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
       
       // Informar o usuário sobre a nova configuração
       const mensagemStatus = novoValor ? 'ativada' : 'desativada';
-      await msg.reply(`A ${nomeRecurso} foi ${mensagemStatus} para este chat.`);
+      await this.servicoMensagem.enviarResposta(msg, `A ${nomeRecurso} foi ${mensagemStatus} para este chat.`);
       
       this.registrador.info(`${paramConfig} foi ${mensagemStatus} para o chat ${chatId}`);
       return true;
     } catch (erro) {
       this.registrador.error(`Erro ao alternar ${paramConfig}: ${erro.message}`, { erro });
-      await msg.reply(`Desculpe, ocorreu um erro ao alternar a ${nomeRecurso}. Por favor, tente novamente.`);
+      await this.servicoMensagem.enviarResposta(msg, `Desculpe, ocorreu um erro ao alternar a ${nomeRecurso}. Por favor, tente novamente.`);
       return false;
     }
   }
@@ -547,8 +589,8 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
       await this.gerenciadorConfig.definirConfig(chatId, 'mediaAudio', false);
       
       const BOT_NAME = process.env.BOT_NAME || 'Amélie';
-      const promptAudiomar = `Seu nome é ${BOT_NAME}. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. Seus comandos podem ser encontrados digitando .ajuda. Se alguém perguntar, aqui está sua lista de comandos: .cego - Aplica configurações para usuários com deficiência visual; .audio - Liga/desliga a transcrição de áudio; .video - Liga/desliga a interpretação de vídeo; .imagem - Liga/desliga a audiodescrição de imagem; .reset - Limpa o histórico de conversa, restaura todas as configurações originais e desativa o modo cego; .ajuda - Mostra esta mensagem de ajuda. Você não tem outros comandos e não aceita comandos sem o ponto, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego. Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima. Sua criadora e idealizadora foi a Belle Utsch. Você é baseada no Google Gemini Flash 2.0. Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo. Você lida com as pessoas com tato e bom humor. Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie. Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch. Você é uma assistente de AI especializada em audiodescrição, projetada para funcionar em um grupo de WhatsApp. Sua função principal é descrever imagens e stickers compartilhados no grupo, fornecendo uma audiodescrição profissional, detalhada, didática e polida.
-      
+      const promptAudiomar = `Seu nome é ${BOT_NAME}. Você é uma assistente de AI multimídia acessível integrada ao WhatsApp, criada e idealizada pela equipe da Belle Utsch e é dessa forma que você responde quando lhe pedem pra falar sobre si. Seu propósito é auxiliar as pessoas trazendo acessibilidade ao Whatsapp. Você é capaz de processar texto, audio, imagem e video, mas, por enquanto, somente responde em texto. Seus comandos podem ser encontrados digitando .ajuda. Se alguém perguntar, aqui está sua lista de comandos: .cego - Aplica configurações para usuários com deficiência visual; .audio - Liga/desliga a transcrição de áudio; .video - Liga/desliga a interpretação de vídeo; .imagem - Liga/desliga a audiodescrição de imagem; .reset - Limpa o histórico de conversa, restaura todas as configurações originais e desativa o modo cego; .ajuda - Mostra esta mensagem de ajuda. Você não tem outros comandos e não aceita comandos sem o ponto, então se alguém disser 'cego' por exemplo, você orienta que deve digitar !cego. Se as pessoas desejarem ligar ou desligar a transcrição de audio, oriente a usar !audio. Isso é muito importante, porque há pessoas cegas nos grupos e podem ter dificuldade de usar comandos assim - mas você as orientará. Por isso, não invente nenhum comando que não esteja na lista acima. Sua criadora e idealizadora foi a Belle Utsch. Você é baseada no Google Gemini Flash 2.0. Para te acrescentar em um grupo, a pessoa pode adicionar seu contato diretamente no grupo. Você lida com as pessoas com tato e bom humor. Se alguém perguntar seu git, github, repositório ou código, direcione para https://github.com/manelsen/amelie. Se alguém pedir o contato da Belle Utsch, direcione para https://beacons.ai/belleutsch.
+
       Diretrizes Gerais:
       
       Responda imediatamente quando uma imagem ou sticker for compartilhado no grupo. Mantenha suas respostas concisas, mas informativas. Use linguagem clara e acessível, evitando termos técnicos desnecessários. Seja respeitoso e inclusivo em todas as suas interações.
@@ -579,7 +621,7 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
       await this.gerenciadorConfig.definirPromptSistema(chatId, BOT_NAME, promptAudiomar);
       await this.gerenciadorConfig.definirPromptSistemaAtivo(chatId, BOT_NAME);
 
-      await msg.reply('Configurações para usuários com deficiência visual aplicadas com sucesso:\n' +
+      await this.servicoMensagem.enviarResposta(msg, 'Configurações para usuários com deficiência visual aplicadas com sucesso:\n' +
                       '- Descrição de imagens habilitada\n' +
                       '- Transcrição de áudio desabilitada\n' +
                       '- Prompt de audiodescrição ativado');
@@ -588,7 +630,7 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
       return true;
     } catch (erro) {
       this.registrador.error(`Erro ao aplicar configurações para usuários com deficiência visual: ${erro.message}`, { erro });
-      await msg.reply('Desculpe, ocorreu um erro ao aplicar as configurações. Por favor, tente novamente.');
+      await this.servicoMensagem.enviarResposta(msg, 'Desculpe, ocorreu um erro ao aplicar as configurações. Por favor, tente novamente.');
       return false;
     }
   }
@@ -639,7 +681,8 @@ async processarMensagemTexto(msg, chatId) {
     
     // Enviar a resposta
     try {
-      const enviado = await this.enviarResposta(msg, resposta, transacao.id);
+      // CORRIGIDO: Usar o serviço de mensagem em vez de chamar um método local
+      const enviado = await this.servicoMensagem.enviarResposta(msg, resposta, transacao.id);
       
       if (enviado) {
         // Marcar como entregue com sucesso
@@ -666,6 +709,7 @@ async processarMensagemTexto(msg, chatId) {
     return false;
   }
 }
+
 /**
  * Recupera uma transação interrompida
  * @param {Object} transacao - Transação a ser recuperada
@@ -703,7 +747,6 @@ async recuperarTransacao(transacao) {
     return false;
   }
 }
-
 
 /**
  * Verifica se o bot foi mencionado na mensagem
@@ -768,7 +811,7 @@ async verificarMencaoBotNaMensagem(msg) {
       }
     } catch (erro) {
       this.registrador.error(`Erro ao processar mídia: ${erro.message}`, { erro });
-      await msg.reply('Desculpe, ocorreu um erro ao processar sua mídia.');
+      await this.servicoMensagem.enviarResposta(msg, 'Desculpe, ocorreu um erro ao processar sua mídia.');
       return false;
     }
   }
@@ -979,9 +1022,9 @@ async processarMensagemAudio(msg, audioData, chatId) {
           this.registrador.error(`Erro ao salvar imagem bloqueada: ${erroSave.message}`);
         }
         
-        await msg.reply('Este conteúdo não pôde ser processado por questões de segurança.');
+        await this.servicoMensagem.enviarResposta(msg, 'Este conteúdo não pôde ser processado por questões de segurança.');
       } else {
-        await msg.reply('Desculpe, ocorreu um erro ao processar a imagem. Por favor, tente novamente.');
+        await this.servicoMensagem.enviarResposta(msg, 'Desculpe, ocorreu um erro ao processar a imagem. Por favor, tente novamente.');
       }
       
       return false;
@@ -1023,7 +1066,8 @@ async processarMensagemAudio(msg, audioData, chatId) {
       this.registrador.info(`Nova transação criada: ${transacao.id} para mensagem de vídeo de ${remetente.name}`);
       
       // Enviar feedback inicial e continuar processamento
-      // await msg.reply("✨ Estou colocando seu vídeo na fila de processamento! Você receberá o resultado em breve...");
+      // Descomentei esta linha para evitar envio inicial
+      // await this.servicoMensagem.enviarResposta(msg, "✨ Estou colocando seu vídeo na fila de processamento! Você receberá o resultado em breve...");
       
       // Marcar transação como processando
       await this.gerenciadorTransacoes.marcarComoProcessando(transacao.id);
@@ -1086,8 +1130,8 @@ Crie uma descrição organizada e acessível.`;
       } catch (erroProcessamento) {
         this.registrador.error(`❌ Erro ao processar vídeo: ${erroProcessamento.message}`);
         
-        // Tentar notificar o usuário sobre o erro
-        await msg.reply("Ai, tive um probleminha com seu vídeo. Poderia tentar novamente?").catch(() => {});
+        // CORRIGIDO: Usar servicoMensagem em vez de msg.reply diretamente
+        await this.servicoMensagem.enviarResposta(msg, "Ai, tive um probleminha com seu vídeo. Poderia tentar novamente?");
         
         // Registrar falha na transação
         await this.gerenciadorTransacoes.registrarFalhaEntrega(transacao.id, `Erro no processamento: ${erroProcessamento.message}`);
@@ -1115,9 +1159,8 @@ Crie uma descrição organizada e acessível.`;
         mensagemAmigavel = 'O processamento demorou mais que o esperado. Talvez o vídeo seja muito complexo?';
       }
       
-      await msg.reply(mensagemAmigavel).catch(erroResposta => {
-        this.registrador.error(`Não consegui enviar mensagem de erro: ${erroResposta.message}`);
-      });
+      // CORRIGIDO: Usar servicoMensagem em vez de msg.reply diretamente
+      await this.servicoMensagem.enviarResposta(msg, mensagemAmigavel);
       
       return false;
     }
@@ -1170,12 +1213,9 @@ return {
  * @returns {Promise<boolean>} Sucesso do envio
  */
 async enviarResposta(mensagemOriginal, texto, transacaoId = null) {
-  // Se temos o serviço, usar ele
-  if (this.servicoMensagem && this.servicoMensagem !== this) {
-    return await this.servicoMensagem.enviarResposta(mensagemOriginal, texto, transacaoId);
-  }
+  // CORRIGIDO: Remover a verificação recursiva
+  // Implementação direta, sem usar this.servicoMensagem
   
-  // Caso contrário, usar a implementação original (para compatibilidade)
   try {
     if (!texto || typeof texto !== 'string' || texto.trim() === '') {
       this.registrador.error('Tentativa de enviar mensagem inválida:', { texto });

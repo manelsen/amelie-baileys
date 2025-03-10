@@ -171,23 +171,76 @@ class GerenciadorTransacoes extends EventEmitter {
         return false;
       }
       
-      await clienteWhatsApp.enviarMensagem(transacao.chatId, transacao.resposta);
-      await this.marcarComoEntregue(transacao.id);
-      
-      this.registrador.info(`Transação ${transacao.id} reprocessada com sucesso`);
-      return true;
+      // Verificar diferentes formas de enviar mensagens
+      try {
+        // Verificar qual interface temos disponível
+        if (clienteWhatsApp.cliente && typeof clienteWhatsApp.cliente.sendMessage === 'function') {
+          // Estamos recebendo o objeto ClienteWhatsApp, usar o cliente interno
+          await clienteWhatsApp.cliente.sendMessage(transacao.chatId, transacao.resposta);
+        } 
+        else if (typeof clienteWhatsApp.sendMessage === 'function') {
+          // Estamos recebendo o cliente diretamente
+          await clienteWhatsApp.sendMessage(transacao.chatId, transacao.resposta);
+        }
+        else if (typeof clienteWhatsApp.enviarMensagem === 'function') {
+          // Usando método wrapper em português
+          await clienteWhatsApp.enviarMensagem(transacao.chatId, transacao.resposta);
+        }
+        else {
+          throw new Error("Cliente WhatsApp inválido ou sem método de envio");
+        }
+        
+        await this.marcarComoEntregue(transacao.id);
+        this.registrador.info(`Transação ${transacao.id} reprocessada com sucesso`);
+        return true;
+      } catch (erro) {
+        this.registrador.error(`Erro ao reprocessar transação ${transacao.id}: ${erro.message}`);
+        return false;
+      }
     };
     
-    const resultado = await this.repoTransacoes.processarTransacoesPendentes(processarTransacao);
-    
-    return Resultado.dobrar(
-      resultado,
-      (processadas) => processadas,
-      (erro) => {
-        this.registrador.error(`Erro ao processar transações pendentes: ${erro.message}`);
-        throw erro;
+    try {
+      // Agora vamos tentar diferentes nomes possíveis para o método
+      let transacoes = [];
+      
+      if (typeof this.repoTransacoes.encontrarTransacoesPendentes === 'function') {
+        transacoes = await this.repoTransacoes.encontrarTransacoesPendentes();
+      } 
+      else if (typeof this.repoTransacoes.encontrar === 'function') {
+        // Tentar usar o método genérico com filtro
+        transacoes = await this.repoTransacoes.encontrar({
+          status: { $in: ['processando', 'resposta_gerada', 'falha_temporaria'] },
+          resposta: { $exists: true }
+        });
       }
-    );
+      else {
+        throw new Error("Método para buscar transações pendentes não encontrado");
+      }
+      
+      if (transacoes.length === 0) {
+        this.registrador.info(`Nenhuma transação pendente para reprocessamento`);
+        return 0;
+      }
+      
+      this.registrador.info(`Encontradas ${transacoes.length} transações pendentes para reprocessamento`);
+      
+      // Processamento das transações
+      let processadas = 0;
+      for (const transacao of transacoes) {
+        try {
+          const sucesso = await processarTransacao(transacao);
+          if (sucesso) processadas++;
+        } catch (erro) {
+          this.registrador.error(`Erro ao reprocessar transação ${transacao.id}: ${erro.message}`);
+        }
+      }
+      
+      this.registrador.info(`Processadas ${processadas} de ${transacoes.length} transações pendentes`);
+      return processadas;
+    } catch (erro) {
+      this.registrador.error(`Erro ao processar transações pendentes: ${erro.message}`);
+      return 0;
+    }
   }
 
   async limparTransacoesAntigas(diasRetencao = 7) {
