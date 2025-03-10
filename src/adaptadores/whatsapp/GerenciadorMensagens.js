@@ -31,11 +31,6 @@ constructor(registrador, clienteWhatsApp, gerenciadorConfig, gerenciadorAI, fila
   this.filaProcessamento = filaProcessamento;
   this.gerenciadorTransacoes = gerenciadorTransacoes;
   this.servicoMensagem = servicoMensagem || { 
-  enviarResposta: this.enviarResposta.bind(this) // Fallback para compatibilidade
-  };
-  
-  // Serviço centralizado de mensagens (novo!)
-  this.servicoMensagem = servicoMensagem || { 
     enviarResposta: this.enviarResposta.bind(this) // Fallback para compatibilidade
   };
   
@@ -264,7 +259,7 @@ configurarCallbacksProcessamento() {
       this.registrador.error(`Erro ao processar mensagem: ${erro.message}`, { erro });
       
       try {
-        await msg.reply('Desculpe, ocorreu um erro inesperado. Por favor, tente novamente mais tarde.');
+        await this.servicoMensagem.enviarResposta('Desculpe, ocorreu um erro inesperado. Por favor, tente novamente mais tarde.');
       } catch (erroResposta) {
         this.registrador.error(`Não consegui enviar mensagem de erro: ${erroResposta.message}`);
       }
@@ -288,7 +283,7 @@ configurarCallbacksProcessamento() {
         case 'reset':
           await this.gerenciadorConfig.resetarConfig(chatId);
           await this.gerenciadorConfig.limparPromptSistemaAtivo(chatId);
-          await msg.reply('Configurações resetadas para este chat. As transcrições de áudio e imagem foram habilitadas, e os prompts especiais foram desativados.');
+          await this.servicoMensagem.enviarResposta('Configurações resetadas para este chat. As transcrições de áudio e imagem foram habilitadas, e os prompts especiais foram desativados.');
           return true;
 
         case 'ajuda':
@@ -367,12 +362,12 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
           return true;
 
         default:
-          await msg.reply('Comando desconhecido. Use .ajuda para ver os comandos disponíveis.');
+          await this.servicoMensagem.enviarResposta('Comando desconhecido. Use .ajuda para ver os comandos disponíveis.');
           return false;
       }
     } catch (erro) {
       this.registrador.error(`Erro ao processar comando: ${erro.message}`, { erro });
-      await msg.reply('Desculpe, ocorreu um erro ao processar seu comando.');
+      await this.servicoMensagem.enviarResposta('Desculpe, ocorreu um erro ao processar seu comando.');
       return false;
     }
   }
@@ -387,7 +382,7 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
     const ehAdministrador = true; // Mudar isso para sua lógica de verificação de administrador
     
     if (!ehAdministrador) {
-      await msg.reply('❌ Desculpe, apenas administradores podem gerenciar as filas.');
+      await this.servicoMensagem.enviarResposta('❌ Desculpe, apenas administradores podem gerenciar as filas.');
       return;
     }
     
@@ -407,16 +402,16 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
         } else if (tipoFila === 'imagem' || tipoFila === 'imagens' || tipoFila === 'image') {
           relatorio = await this.filaProcessamentoImagem.getFormattedQueueStatus();
         } else {
-          await msg.reply('Tipo de fila inválido. Use: todas, video ou imagem');
+          await this.servicoMensagem.enviarResposta('Tipo de fila inválido. Use: todas, video ou imagem');
           return;
         }
         
-        await msg.reply(relatorio);
+        await this.servicoMensagem.enviarResposta(relatorio);
         break;
         
       case 'limpar':
         if (!tipoFila) {
-          await msg.reply('Especifique o tipo de fila para limpar: todas, video ou imagem');
+          await this.servicoMensagem.enviarResposta('Especifique o tipo de fila para limpar: todas, video ou imagem');
           return;
         }
         
