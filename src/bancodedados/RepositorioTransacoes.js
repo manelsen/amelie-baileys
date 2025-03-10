@@ -199,38 +199,42 @@ class RepositorioTransacoes extends RepositorioNeDB {
     const limiteTempoFalha = new Date(Date.now() - 5 * 60 * 1000); // 5 minutos
     
     const resultado = await this.encontrar({ 
-      status: 'falha_temporaria',
-      ultimaAtualizacao: { $lt: limiteTempoFalha },
-      tentativas: { $lt: 3 }
+        status: 'falha_temporaria',
+        ultimaAtualizacao: { $lt: limiteTempoFalha },
+        tentativas: { $lt: 3 }
     });
     
     return Resultado.encadear(resultado, async transacoes => {
-      if (transacoes.length === 0) {
-        return Resultado.sucesso(0);
-      }
-      
-      this.registrador.info(`Encontradas ${transacoes.length} transações pendentes para reprocessamento`);
-      
-      // Processamento funcional das transações
-      const resultados = await Promise.all(
-        transacoes.map(async transacao => {
-          try {
-            await processador(transacao);
-            return { sucesso: true, id: transacao.id };
-          } catch (erro) {
-            this.registrador.error(`Erro ao reprocessar transação ${transacao.id}: ${erro.message}`);
-            return { sucesso: false, id: transacao.id, erro };
-          }
-        })
-      );
-      
-      // Contar sucessos
-      const processadas = resultados.filter(r => r.sucesso).length;
-      this.registrador.info(`Processadas ${processadas} de ${transacoes.length} transações pendentes`);
-      
-      return Resultado.sucesso(processadas);
+        // Garantir que transacoes seja sempre um array
+        const transacoesArray = Array.isArray(transacoes) ? transacoes : [];
+        
+        if (transacoesArray.length === 0) {
+            return Resultado.sucesso(0);
+        }
+        
+        this.registrador.info(`Encontradas ${transacoesArray.length} transações pendentes para reprocessamento`);
+        
+        // Processamento funcional das transações
+        const resultados = await Promise.all(
+            transacoesArray.map(async transacao => {
+                try {
+                    await processador(transacao);
+                    return { sucesso: true, id: transacao.id };
+                } catch (erro) {
+                    this.registrador.error(`Erro ao reprocessar transação ${transacao.id}: ${erro.message}`);
+                    return { sucesso: false, id: transacao.id, erro };
+                }
+            })
+        );
+        
+        // Contar sucessos
+        const processadas = resultados.filter(r => r.sucesso).length;
+        this.registrador.info(`Processadas ${processadas} de ${transacoesArray.length} transações pendentes`);
+        
+        return Resultado.sucesso(processadas);
     });
-  }
+}
+
   
   /**
    * Limpa transações antigas

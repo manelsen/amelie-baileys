@@ -210,7 +210,7 @@ clienteWhatsApp.on('pronto', async () => {
   }
   
   // Processar transações pendentes
-  const transacoesProcessadas = await gerenciadorTransacoes.processarTransacoesPendentes(clienteWhatsApp.cliente);
+  const transacoesProcessadas = await gerenciadorTransacoes.processarTransacoesPendentes(clienteWhatsApp);
   if (transacoesProcessadas > 0) {
     logger.info(`Processadas ${transacoesProcessadas} transações pendentes na inicialização`);
   }
@@ -225,7 +225,7 @@ setInterval(async () => {
     const notificacoesProcessadas = await gerenciadorNotificacoes.processar(clienteWhatsApp.cliente);
     
     // Processar transações pendentes
-    const transacoesProcessadas = await gerenciadorTransacoes.processarTransacoesPendentes(clienteWhatsApp.cliente);
+    const transacoesProcessadas = await gerenciadorTransacoes.processarTransacoesPendentes(clienteWhatsApp);
     
     if (notificacoesProcessadas > 0 || transacoesProcessadas > 0) {
       logger.info(`Processamento periódico: ${notificacoesProcessadas} notificações, ${transacoesProcessadas} transações`);
