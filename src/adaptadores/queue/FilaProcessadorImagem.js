@@ -144,16 +144,6 @@ class FilaProcessadorImagem {
         // Verificar se é um erro de segurança
         if (erro.message.includes('SAFETY') || erro.message.includes('safety') || 
             erro.message.includes('blocked') || erro.message.includes('Blocked')) {
-          await this.salvarImagemBloqueada(imageData, {
-            mimeType,
-            erro: erro.message,
-            senderNumber,
-            chatId,
-            messageId,
-            userPrompt,
-            transacaoId,
-            jobId: job.id
-          });
           
           // Notificar via callback em vez de diretamente
           if (this.respostaCallback) {

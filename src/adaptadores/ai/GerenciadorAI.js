@@ -383,37 +383,7 @@ async processarAudio(audioData, audioId, config) {
     if (erro.message.includes('SAFETY') || erro.message.includes('safety') || 
         erro.message.includes('blocked') || erro.message.includes('Blocked')) {
       
-      // Salvar o áudio para análise posterior
-      try {
-        const diretorioBlocked = path.join(process.cwd(), 'blocked');
-        if (!fs.existsSync(diretorioBlocked)) {
-          fs.mkdirSync(diretorioBlocked, { recursive: true });
-        }
-        
-        // Salvar o áudio
-        const dataHora = new Date().toISOString().replace(/[:.-]/g, '_');
-        const caminhoAudio = path.join(diretorioBlocked, `blocked_audio_${audioId}_${dataHora}.ogg`);
-        
-        const buffer = Buffer.from(audioData.data, 'base64');
-        fs.writeFileSync(caminhoAudio, buffer);
-        
-        // Salvar metadados
-        const metadados = {
-          timestamp: new Date().toISOString(),
-          tipoArquivo: audioData.mimetype || 'audio/ogg',
-          erro: erro.message,
-          audioId: audioId,
-          mimeType: audioData.mimetype
-        };
-        
-        const caminhoMetadados = path.join(diretorioBlocked, `blocked_audio_${audioId}_${dataHora}.json`);
-        fs.writeFileSync(caminhoMetadados, JSON.stringify(metadados, null, 2), 'utf8');
-        
-        this.registrador.warn(`⚠️ Áudio bloqueado por segurança salvo em: ${caminhoAudio}`);
-      } catch (erroSave) {
-        this.registrador.error(`Erro ao salvar áudio bloqueado: ${erroSave.message}`);
-      }
-      
+      this.registrador.warn(`⚠️ Conteúdo de áudio bloqueado por políticas de segurança`);
       return "Este conteúdo não pôde ser processado por questões de segurança.";
     }
     

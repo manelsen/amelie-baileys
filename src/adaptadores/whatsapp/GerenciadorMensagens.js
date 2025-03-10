@@ -932,112 +932,72 @@ async processarMensagemAudio(msg, audioData, chatId) {
 }
 
   /**
-   * Processa uma mensagem com imagem usando a fila de processamento desacoplada
-   * @param {Object} msg - Mensagem do WhatsApp
-   * @param {Object} imagemData - Dados da imagem
-   * @param {string} chatId - ID do chat
-   * @returns {Promise<boolean>} Sucesso do processamento
-   */
-  async processarMensagemImagem(msg, imagemData, chatId) {
-    try {
-      const chat = await msg.getChat();
-      const config = await this.gerenciadorConfig.obterConfig(chatId);
-      const remetente = await this.obterOuCriarUsuario(msg.author || msg.from, chat);
-      
-      if (!config.mediaImage) {
-        this.registrador.info(`Descrição de imagem desabilitada para o chat ${chatId}. Ignorando mensagem de imagem.`);
-        return false;
-      }
-      
-      // Criar transação para esta mensagem de imagem
-      const transacao = await this.gerenciadorTransacoes.criarTransacao(msg, chat);
-      this.registrador.info(`Nova transação criada: ${transacao.id} para mensagem de imagem de ${remetente.name}`);
-      
-      // Marcar transação como processando
-      await this.gerenciadorTransacoes.marcarComoProcessando(transacao.id);
-      
-      // Determinar o prompt do usuário
-      let promptUsuario = "";
-      
-      if (msg.body && msg.body.trim() !== '') {
-        promptUsuario = msg.body.trim();
-      }
-      
-      await this.filaProcessamentoImagem.add('process-image', {
-        imageData: imagemData, 
-        chatId, 
-        messageId: msg.id._serialized,
-        mimeType: imagemData.mimetype,
-        userPrompt: promptUsuario,
-        senderNumber: msg.from,
-        transacaoId: transacao.id,
-        remetenteName: remetente.name,
-        modoDescricao: config.modoDescricao || 'curto' // Adicionado com padrão 'curto'
-      }, { 
-        removeOnComplete: true,
-        removeOnFail: false,
-        timeout: 60000 // 1 minuto
-      });
-      
-      this.registrador.debug(`🚀 Imagem de ${remetente.name} na fila - transação ${transacao.id}`);
-      return true;
-      
-    } catch (erro) {
-      this.registrador.error(`Erro ao processar mensagem de imagem: ${erro.message}`, { erro });
-      
-      // Verificar se é um erro de segurança
-      if (erro.message.includes('SAFETY') || erro.message.includes('safety') || 
-          erro.message.includes('blocked') || erro.message.includes('Blocked')) {
-        
-        // Salvar a imagem para análise posterior
-        try {
-          const diretorioBlocked = path.join(process.cwd(), 'blocked');
-          if (!fs.existsSync(diretorioBlocked)) {
-            fs.mkdirSync(diretorioBlocked, { recursive: true });
-          }
-          
-          // Salvar a imagem
-          const dataHora = new Date().toISOString().replace(/[:.-]/g, '_');
-          const remetente = msg.from || 'unknown';
-          const caminhoImagem = path.join(diretorioBlocked, `blocked_image_${remetente}_${dataHora}.jpg`);
-          
-          const buffer = Buffer.from(imagemData.data, 'base64');
-          fs.writeFileSync(caminhoImagem, buffer);
-          
-          // Salvar metadados
-          const metadados = {
-            timestamp: new Date().toISOString(),
-            tipoArquivo: imagemData.mimetype || 'image/unknown',
-            erro: erro.message,
-            remetente: {
-              id: msg.from || 'desconhecido',
-              author: msg.author || msg.from || 'desconhecido'
-            },
-            grupo: chatId.endsWith('@g.us') ? {
-              id: chatId
-            } : null,
-            mensagem: {
-              id: msg.id._serialized || 'desconhecido',
-              prompt: msg.body || '',
-            }
-          };
-          
-          const caminhoMetadados = path.join(diretorioBlocked, `blocked_image_${remetente}_${dataHora}.json`);
-          fs.writeFileSync(caminhoMetadados, JSON.stringify(metadados, null, 2), 'utf8');
-          
-          this.registrador.warn(`⚠️ Imagem bloqueada por segurança salva em: ${caminhoImagem}`);
-        } catch (erroSave) {
-          this.registrador.error(`Erro ao salvar imagem bloqueada: ${erroSave.message}`);
-        }
-        
-        this.registrador.info(`Erro de safety detectado - o callback da fila enviará a resposta`);
-      } else {
-        this.registrador.info(`Erro geral detectado - o callback da fila enviará a resposta`);
-      }
-      
+ * Processa uma mensagem com imagem usando a fila de processamento desacoplada
+ * @param {Object} msg - Mensagem do WhatsApp
+ * @param {Object} imagemData - Dados da imagem
+ * @param {string} chatId - ID do chat
+ * @returns {Promise<boolean>} Sucesso do processamento
+ */
+async processarMensagemImagem(msg, imagemData, chatId) {
+  try {
+    const chat = await msg.getChat();
+    const config = await this.gerenciadorConfig.obterConfig(chatId);
+    const remetente = await this.obterOuCriarUsuario(msg.author || msg.from, chat);
+    
+    if (!config.mediaImage) {
+      this.registrador.info(`Descrição de imagem desabilitada para o chat ${chatId}. Ignorando mensagem de imagem.`);
       return false;
     }
+    
+    // Criar transação para esta mensagem de imagem
+    const transacao = await this.gerenciadorTransacoes.criarTransacao(msg, chat);
+    this.registrador.info(`Nova transação criada: ${transacao.id} para mensagem de imagem de ${remetente.name}`);
+    
+    // Marcar transação como processando
+    await this.gerenciadorTransacoes.marcarComoProcessando(transacao.id);
+    
+    // Determinar o prompt do usuário
+    let promptUsuario = "";
+    
+    if (msg.body && msg.body.trim() !== '') {
+      promptUsuario = msg.body.trim();
+    }
+    
+    await this.filaProcessamentoImagem.add('process-image', {
+      imageData: imagemData, 
+      chatId, 
+      messageId: msg.id._serialized,
+      mimeType: imagemData.mimetype,
+      userPrompt: promptUsuario,
+      senderNumber: msg.from,
+      transacaoId: transacao.id,
+      remetenteName: remetente.name,
+      modoDescricao: config.modoDescricao || 'curto' // Adicionado com padrão 'curto'
+    }, { 
+      removeOnComplete: true,
+      removeOnFail: false,
+      timeout: 60000 // 1 minuto
+    });
+    
+    this.registrador.info(`🚀 Imagem de ${remetente.name} adicionada à fila com sucesso (transação ${transacao.id})`);
+    return true;
+    
+  } catch (erro) {
+    this.registrador.error(`Erro ao processar mensagem de imagem: ${erro.message}`, { erro });
+    
+    // Verificar se é um erro de segurança
+    if (erro.message.includes('SAFETY') || erro.message.includes('safety') || 
+        erro.message.includes('blocked') || erro.message.includes('Blocked')) {
+      
+      this.registrador.warn(`⚠️ Conteúdo de imagem bloqueado por políticas de segurança`);
+      this.registrador.info(`Erro de safety detectado - o callback da fila enviará a resposta`);
+    } else {
+      this.registrador.info(`Erro geral detectado - o callback da fila enviará a resposta`);
+    }
+    
+    return false;
   }
+}
 
   /**
    * Processa uma mensagem com vídeo de forma assíncrona
