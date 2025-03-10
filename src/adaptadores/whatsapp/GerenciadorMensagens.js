@@ -1107,7 +1107,7 @@ Crie uma descrição organizada e acessível.`;
         const videoBuffer = Buffer.from(videoData.data, 'base64');
         
         await fs.promises.writeFile(arquivoTemporario, videoBuffer);
-        this.registrador.info(`✅ Arquivo de vídeo salvo com sucesso: ${arquivoTemporario} (${Math.round(videoBuffer.length / 1024)} KB)`);
+        this.registrador.debug(`✅ Arquivo de vídeo salvo com sucesso: ${arquivoTemporario} (${Math.round(videoBuffer.length / 1024)} KB)`);
         
         const stats = await fs.promises.stat(arquivoTemporario);
         if (stats.size !== videoBuffer.length) {

@@ -27,7 +27,6 @@ class ConfigManager {
       modoDescricao: 'curto'
     };
     
-    this.registrador.info('Gerenciador de configurações inicializado');
   }
 
   async definirConfig(chatId, param, valor) {

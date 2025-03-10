@@ -684,7 +684,7 @@ configurarEventosQueue(queue, nomeEtapa) {
     
     queue.on('completed', (job, result) => {
       const duracao = Date.now() - (job.processedOn || job.timestamp);
-      this.registrador.info(`[${nomeEtapa}] Job ${job.id} concluído em ${duracao}ms`);
+      this.registrador.debug(`[${nomeEtapa}] Job ${job.id} concluído em ${duracao}ms`);
     });
     
     queue.on('failed', (job, error) => {

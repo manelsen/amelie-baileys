@@ -152,7 +152,7 @@ class GerenciadorTransacoes extends EventEmitter {
       // Agora excluímos a transação após marcar como entregue
       if (resultado.sucesso) {
         await this.repoTransacoes.remover({ id: transacaoId });
-        this.registrador.info(`Transação ${transacaoId} removida após entrega`);
+        this.registrador.debug(`Transação ${transacaoId} removida após entrega`);
       }
 
       return true; // Simplificando o retorno para evitar erros
