@@ -134,43 +134,53 @@ iniciar() {
   /**
  * Configura callbacks para receber resultados do processamento de filas
  */
+  // No arquivo GerenciadorMensagens.js
 configurarCallbacksProcessamento() {
-  // Definir uma função de processamento que usa nosso serviço centralizado
+  // Simplificando drasticamente o processador
   const processarResultadoFila = async (resultado) => {
     try {
-      const { resposta, chatId, messageId, senderNumber, transacaoId, remetenteName } = resultado;
-      
-      // Recuperar mensagem original por referência usando o ID da mensagem
-      let mensagemOriginal;
-      try {
-        mensagemOriginal = await this.clienteWhatsApp.cliente.getMessageById(messageId);
-      } catch (erroMsg) {
-        this.registrador.error(`Não foi possível recuperar a mensagem original: ${erroMsg.message}`);
-        // Tentar enviar sem referência caso não consiga recuperar
-        await this.servicoMensagem.enviarResposta(
-          { from: senderNumber }, // Objeto simples para compatibilidade
-          resposta,
-          transacaoId
-        );
+      // Verificar se resultado existe e tem os dados mínimos
+      if (!resultado || !resultado.senderNumber) {
+        this.registrador.warn("Resultado de fila inválido ou incompleto");
         return;
       }
       
-      await this.servicoMensagem.enviarResposta(mensagemOriginal, resposta, transacaoId);
+      const { resposta, senderNumber, transacaoId } = resultado;
       
-      // Atualizar a transação se houver um ID
-      if (transacaoId) {
-        await this.gerenciadorTransacoes.adicionarRespostaTransacao(transacaoId, resposta);
-        await this.gerenciadorTransacoes.marcarComoEntregue(transacaoId);
+      // Enviar a mensagem da maneira mais simples e direta possível
+      try {
+        await this.clienteWhatsApp.enviarMensagem(senderNumber, resposta);
+        
+        // Se chegou aqui, deu certo! Vamos concluir a transação
+        if (transacaoId) {
+          await this.gerenciadorTransacoes.adicionarRespostaTransacao(transacaoId, resposta);
+          await this.gerenciadorTransacoes.marcarComoEntregue(transacaoId);
+        }
+      } catch (erroEnvio) {
+        // Usamos uma string simples em vez de acessar properties
+        this.registrador.error(`Erro ao enviar mensagem: ${String(erroEnvio)}`);
+        
+        // Ainda tentar atualizar a transação com a falha
+        if (transacaoId) {
+          try {
+            await this.gerenciadorTransacoes.registrarFalhaEntrega(
+              transacaoId, 
+              `Erro ao enviar: ${String(erroEnvio)}`
+            );
+          } catch (erroTransacao) {
+            this.registrador.error(`Erro adicional ao registrar falha: ${String(erroTransacao)}`);
+          }
+        }
       }
     } catch (erro) {
-      this.registrador.error(`Erro ao processar resultado de fila: ${erro.message}`, { erro });
+      // Usar apenas String() para garantir que mesmo objetos não padronizados sejam convertidos
+      this.registrador.error(`Erro ao processar resultado de fila: ${String(erro)}`);
     }
   };
 
-  // Usar a mesma função de processamento para todas as filas
+  // Usar a função com as filas
   this.filaProcessamentoImagem.setRespostaCallback(processarResultadoFila);
   
-  // Verificar se o processador de vídeo tem a função setResultCallback antes de chamar
   if (this.filaProcessamento && typeof this.filaProcessamento.setResultCallback === 'function') {
     this.filaProcessamento.setResultCallback(processarResultadoFila);
   }
@@ -1174,34 +1184,42 @@ Crie uma descrição organizada e acessível.`;
     try {
       // Se temos gerenciadorConfig, usar o método dele
       if (this.gerenciadorConfig) {
-        return await this.gerenciadorConfig.obterOuCriarUsuario(remetente, this.clienteWhatsApp.cliente);
+        const usuario = await this.gerenciadorConfig.obterOuCriarUsuario(remetente, this.clienteWhatsApp.cliente);
+        
+        // Garantir que sempre temos um nome não-undefined
+        if (!usuario.name || usuario.name === 'undefined') {
+          const idCurto = remetente.substring(0, 8).replace(/[^0-9]/g, '');
+          usuario.name = `Usuário${idCurto}`;
+        }
+        
+        return usuario;
       }
-
-// Implementação alternativa caso o gerenciadorConfig não esteja disponível
-const contato = await this.clienteWhatsApp.cliente.getContactById(remetente);
-      
-let nome = contato.pushname || contato.name || contato.shortName;
-
-if (!nome || nome.trim() === '') {
-  const idSufixo = remetente.substring(0, 6);
-  nome = `User${idSufixo}`;
-}
-
-return {
-  id: remetente,
-  name: nome,
-  joinedAt: new Date()
-};
-} catch (erro) {
-this.registrador.error(`Erro ao obter informações do usuário: ${erro.message}`);
-const idSufixo = remetente.substring(0, 6);
-return {
-  id: remetente,
-  name: `User${idSufixo}`,
-  joinedAt: new Date()
-};
-}
-}
+  
+      // Implementação alternativa caso o gerenciadorConfig não esteja disponível
+      const contato = await this.clienteWhatsApp.cliente.getContactById(remetente);
+          
+      let nome = contato.pushname || contato.name || contato.shortName;
+  
+      if (!nome || nome.trim() === '' || nome === 'undefined') {
+        const idSufixo = remetente.substring(0, 6).replace(/[^0-9]/g, '');
+        nome = `Usuário${idSufixo}`;
+      }
+  
+      return {
+        id: remetente,
+        name: nome,
+        joinedAt: new Date()
+      };
+    } catch (erro) {
+      this.registrador.error(`Erro ao obter informações do usuário: ${erro.message}`);
+      const idSufixo = remetente.substring(0, 6).replace(/[^0-9]/g, '');
+      return {
+        id: remetente,
+        name: `Usuário${idSufixo}`,
+        joinedAt: new Date()
+      };
+    }
+  }
 
 /**
  * Envia uma resposta à mensagem original

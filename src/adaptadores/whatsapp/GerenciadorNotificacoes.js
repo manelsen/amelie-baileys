@@ -17,7 +17,7 @@ class GerenciadorNotificacoes {
   constructor(registrador, diretorioTemp = '../temp') {
     this.registrador = registrador;
     this.diretorioTemp = diretorioTemp;
-    
+
     // Garantir que o diretório exista
     if (!fs.existsSync(this.diretorioTemp)) {
       try {
@@ -38,16 +38,16 @@ class GerenciadorNotificacoes {
   async salvar(destinatario, mensagem) {
     try {
       const arquivoNotificacao = path.join(
-        this.diretorioTemp, 
+        this.diretorioTemp,
         `notificacao_${destinatario.replace(/[^0-9]/g, '')}_${Date.now()}.json`
       );
-      
+
       await fs.promises.writeFile(arquivoNotificacao, JSON.stringify({
         senderNumber: destinatario,
         message: mensagem,
         timestamp: Date.now()
       }));
-      
+
       this.registrador.info(`Notificação salva: ${arquivoNotificacao}`);
       return true;
     } catch (erro) {
@@ -65,31 +65,31 @@ class GerenciadorNotificacoes {
     if (!cliente) {
       throw new Error("Cliente não fornecido para processamento de notificações");
     }
-    
+
     try {
       const arquivos = await fs.promises.readdir(this.diretorioTemp);
       const notificacoes = arquivos.filter(f => f.startsWith('notificacao_'));
-      
+
       let processadas = 0;
-      
+
       for (const arquivo of notificacoes) {
         try {
           const caminhoCompleto = path.join(this.diretorioTemp, arquivo);
           const stats = await fs.promises.stat(caminhoCompleto);
-          
+
           // Ignorar arquivos muito recentes (podem estar sendo escritos)
           if (Date.now() - stats.mtime.getTime() < 5000) {
             continue;
           }
-          
+
           const conteudo = await fs.promises.readFile(caminhoCompleto, 'utf8');
           const dados = JSON.parse(conteudo);
-          
+
           // Tentar enviar a mensagem novamente
           if (dados.senderNumber && dados.message) {
             await cliente.sendMessage(dados.senderNumber, dados.message);
             this.registrador.info(`✅ Notificação pendente enviada para ${dados.senderNumber}`);
-            
+
             // Remover arquivo após processamento bem-sucedido
             await fs.promises.unlink(caminhoCompleto);
             processadas++;
@@ -98,11 +98,11 @@ class GerenciadorNotificacoes {
           this.registrador.error(`Erro ao processar arquivo de notificação ${arquivo}: ${err.message}`);
         }
       }
-      
+
       if (processadas > 0) {
         this.registrador.info(`Processadas ${processadas} notificações pendentes`);
       }
-      
+
       return processadas;
     } catch (erro) {
       this.registrador.error(`Erro ao verificar diretório de notificações: ${erro.message}`);
@@ -119,16 +119,16 @@ class GerenciadorNotificacoes {
     try {
       const arquivos = await fs.promises.readdir(this.diretorioTemp);
       const notificacoes = arquivos.filter(f => f.startsWith('notificacao_'));
-      
+
       const agora = Date.now();
       const limiteAntiguidade = agora - (diasAntiguidade * 24 * 60 * 60 * 1000);
       let removidas = 0;
-      
+
       for (const arquivo of notificacoes) {
         try {
           const caminhoCompleto = path.join(this.diretorioTemp, arquivo);
           const stats = await fs.promises.stat(caminhoCompleto);
-          
+
           if (stats.mtimeMs < limiteAntiguidade) {
             await fs.promises.unlink(caminhoCompleto);
             removidas++;
@@ -137,11 +137,11 @@ class GerenciadorNotificacoes {
           this.registrador.error(`Erro ao limpar notificação antiga ${arquivo}: ${err.message}`);
         }
       }
-      
+
       if (removidas > 0) {
         this.registrador.info(`Removidas ${removidas} notificações antigas`);
       }
-      
+
       return removidas;
     } catch (erro) {
       this.registrador.error(`Erro ao limpar notificações antigas: ${erro.message}`);
