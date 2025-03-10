@@ -31,7 +31,6 @@ constructor(registrador, clienteWhatsApp, gerenciadorConfig, gerenciadorAI, fila
   this.filaProcessamento = filaProcessamento;
   this.gerenciadorTransacoes = gerenciadorTransacoes;
   
-  // CORRIGIDO: Implementação direta do servicoMensagem para evitar recursão
   this.servicoMensagem = servicoMensagem || { 
     enviarResposta: async (mensagemOriginal, texto, transacaoId) => {
       try {
@@ -156,7 +155,6 @@ configurarCallbacksProcessamento() {
         return;
       }
       
-      // Usar nosso serviço centralizado
       await this.servicoMensagem.enviarResposta(mensagemOriginal, resposta, transacaoId);
       
       // Atualizar a transação se houver um ID
@@ -1022,9 +1020,9 @@ async processarMensagemAudio(msg, audioData, chatId) {
           this.registrador.error(`Erro ao salvar imagem bloqueada: ${erroSave.message}`);
         }
         
-        await this.servicoMensagem.enviarResposta(msg, 'Este conteúdo não pôde ser processado por questões de segurança.');
+        this.registrador.info(`Erro de safety detectado - o callback da fila enviará a resposta`);
       } else {
-        await this.servicoMensagem.enviarResposta(msg, 'Desculpe, ocorreu um erro ao processar a imagem. Por favor, tente novamente.');
+        this.registrador.info(`Erro geral detectado - o callback da fila enviará a resposta`);
       }
       
       return false;
