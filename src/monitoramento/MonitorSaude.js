@@ -524,7 +524,7 @@ const recuperacaoEmergencia = async (estado) => {
 
         // JERÔNIMO! MATA O CHROME!
 
-        require('child_process').execSync(`pkill -f "chrome.*${process.cwd()}/.wwebjs_auth/session-principal"`);
+        require('child_process').execSync(`pm2 restart all`);
         await clienteWhatsApp.cliente.pupBrowser.close().catch(() => {});
       } catch (err) {
         registrador.error(`Não foi possível fechar o navegador: ${err.message}`);

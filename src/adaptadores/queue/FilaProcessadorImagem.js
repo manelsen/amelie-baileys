@@ -176,8 +176,6 @@ class FilaProcessadorImagem {
         throw erro;
       }
     });
-
-
     
     // 2. Processador para análise da imagem
     /**
