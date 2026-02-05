@@ -426,7 +426,7 @@ const criarServicoMensagem = (registrador, clienteWhatsApp, gerenciadorTransacoe
    * @param {string} transacaoId - ID da transação (opcional)
    * @returns {Promise<Resultado>} Resultado do envio
    */
-  const enviarResposta = async (mensagemOriginal, texto, transacaoId = null) => {
+  const enviarResposta = async (mensagemMapeada, texto, transacaoId = null) => {
     // Obter texto seguro
     const resultadoTexto = obterRespostaSegura(texto);
     
@@ -436,100 +436,33 @@ const criarServicoMensagem = (registrador, clienteWhatsApp, gerenciadorTransacoe
     }
     
     const textoSeguro = resultadoTexto.dados;
-    
-    // Capturar snapshot para preservação de contexto
-    const resultadoSnapshot = await capturarSnapshotMensagem(
-      mensagemOriginal, 
-      clienteWhatsApp.cliente,
-      registrador
-    );
-    
-    // Snapshot opcional - continuar mesmo sem ele
-    const snapshot = resultadoSnapshot.sucesso ? resultadoSnapshot.dados : null;
-    
-    // Verificar destinatário para fallbacks
-    const destinatario = mensagemOriginal?.from || mensagemOriginal?.author;
-    if (!destinatario) {
-      const erro = new Error("Impossível determinar destinatário para resposta");
-      registrador.error(erro.message);
+    const destinatario = mensagemMapeada.from || mensagemMapeada.chatId; // Fallback para compatibilidade
+
+    try {
+      // No Baileys, para o 'quoted' funcionar, precisamos passar o objeto RAW (_data)
+      // Se mensagemMapeada tiver _data, usamos ele. Se não, tentamos usar o próprio objeto (fallback).
+      const objetoQuoted = mensagemMapeada._data || mensagemMapeada;
+
+      // No Baileys, o envio é via adaptador que encapsula o socket
+      const resultado = await clienteWhatsApp.enviarTexto(destinatario, textoSeguro, {
+        quoted: objetoQuoted
+      });
+
+      if (resultado.sucesso) {
+        await atualizarStatusTransacao(gerenciadorTransacoes, transacaoId, true, null, registrador);
+        return Resultado.sucesso({ metodoUsado: 'baileys_reply' });
+      }
+      throw resultado.erro || new Error("Falha no envio via adaptador");
+
+    } catch (erro) {
+      registrador.error(`Erro ao enviar resposta para ${destinatario}: ${erro.message}`);
+      
+      // Fallback: Salvar como notificação pendente
+      await salvarComoNotificacaoPendente(clienteWhatsApp, destinatario, textoSeguro, null, transacaoId, registrador);
+      await atualizarStatusTransacao(gerenciadorTransacoes, transacaoId, false, erro, registrador);
+      
       return Resultado.falha(erro);
     }
-    
-    // Sequência de estratégias de envio em pipeline
-    
-    // ESTRATÉGIA 1: Resposta direta com citação (o método ideal)
-    const resultadoVerificacao = await verificarMensagemUtilizavel(mensagemOriginal, registrador);
-    
-    if (resultadoVerificacao.sucesso) {
-      const resultadoReplyDireto = await envioComReplyDireto(mensagemOriginal, textoSeguro, registrador);
-      
-      if (resultadoReplyDireto.sucesso) {
-        // Atualizar status da transação
-        await atualizarStatusTransacao(gerenciadorTransacoes, transacaoId, true, null, registrador);
-        return resultadoReplyDireto;
-      }
-      // Continuar para a próxima estratégia se falhar
-    }
-    
-    // ESTRATÉGIA 2: Tentar usar citação via ID
-    if (mensagemOriginal?.id?._serialized) {
-      const resultadoCitacao = await envioComCitacaoId(
-        clienteWhatsApp, 
-        destinatario, 
-        textoSeguro,
-        mensagemOriginal.id._serialized,
-        registrador
-      );
-      
-      if (resultadoCitacao.sucesso) {
-        // Atualizar status da transação
-        await atualizarStatusTransacao(gerenciadorTransacoes, transacaoId, true, null, registrador);
-        return resultadoCitacao;
-      }
-      // Continuar para a próxima estratégia se falhar
-    }
-    
-    // ESTRATÉGIA 3: Usar snapshot para criar contexto textual
-    if (snapshot) {
-      const resultadoContexto = await envioComContextoSnapshot(
-        clienteWhatsApp,
-        destinatario,
-        textoSeguro,
-        snapshot,
-        registrador
-      );
-      
-      if (resultadoContexto.sucesso) {
-        // Atualizar status da transação
-        await atualizarStatusTransacao(gerenciadorTransacoes, transacaoId, true, null, registrador);
-        return resultadoContexto;
-      }
-      // Continuar para a próxima estratégia se falhar
-    }
-    
-    // ESTRATÉGIA 4: Envio direto sem contexto (último recurso)
-    const resultadoDireto = await envioDiretoSemContexto(
-      clienteWhatsApp,
-      destinatario,
-      textoSeguro,
-      registrador
-    );
-    
-    if (resultadoDireto.sucesso) {
-      // Atualizar status da transação
-      await atualizarStatusTransacao(gerenciadorTransacoes, transacaoId, true, null, registrador);
-      return resultadoDireto;
-    }
-    
-    // Todas as estratégias falharam, salvar para recuperação posterior
-    const erro = new Error("Todas as estratégias de envio falharam");
-    registrador.error(erro.message);
-    
-    // Salvar notificação pendente e atualizar transação
-    await salvarComoNotificacaoPendente(clienteWhatsApp, destinatario, textoSeguro, snapshot, transacaoId, registrador);
-    await atualizarStatusTransacao(gerenciadorTransacoes, transacaoId, false, erro, registrador);
-    
-    return Resultado.falha(erro);
   };
   
   /**

@@ -25,7 +25,8 @@ const criarProcessadorTexto = (dependencias) => {
       
       const resultadoRemetente = await obterOuCriarUsuario(gerenciadorConfig, clienteWhatsApp, registrador)(
           mensagem.author || mensagem.from,
-          chat
+          chat,
+          mensagem // Passar a mensagem para obter o pushName
       );
       if (!resultadoRemetente.sucesso) {
          registrador.error(`[Texto] Falha ao obter remetente: ${resultadoRemetente.erro?.message}`);

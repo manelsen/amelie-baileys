@@ -27,31 +27,16 @@ const {
  */
 const FilasConfiguracao = {
   /**
-   * Cria configuração Redis
-   * @returns {Object} Configuração do Redis
-   */
-  criarConfigRedis: () => ({
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379
-  }),
-
-  /**
    * Cria configuração das filas
-   * @param {Object} redisConfig - Configuração do Redis
    * @returns {Object} Configuração de filas
    */
-  criarConfigFilas: _.curry((redisConfig) => ({
-    redis: redisConfig,
+  criarConfigFilas: () => ({
     defaultJobOptions: {
-      attempts: 3,
-      backoff: {
-        type: 'exponential',
-        delay: 30000
-      },
-      removeOnComplete: true,
-      removeOnFail: false
+      maxRetries: 3,
+      retryDelay: 30000,
+      afterProcessDelay: 100 // Pequeno delay para aliviar CPU
     }
-  })),
+  }),
 
   /**
    * Obtém configurações para processamento de mídia

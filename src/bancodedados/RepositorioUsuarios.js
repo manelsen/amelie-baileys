@@ -35,7 +35,15 @@ class RepositorioUsuarios extends RepositorioNeDB {
     }
 
     // 4. Se não encontrou (resultadoBusca.dados é null), cria um novo usuário
-    const nomeUsuario = dadosUsuario.nome || `Usuário${idUsuario.substring(0, 6).replace(/[^0-9]/g, '')}`; // Usa nome fornecido ou gera padrão
+    let nomeUsuario = dadosUsuario.nome;
+    
+    if (!nomeUsuario) {
+        if (idUsuario && typeof idUsuario === 'string' && idUsuario.length >= 6) {
+            nomeUsuario = `Usuário${idUsuario.substring(0, 6).replace(/[^0-9]/g, '')}`;
+        } else {
+            nomeUsuario = 'UsuárioDesconhecido';
+        }
+    }
     const novoUsuario = {
       id: idUsuario,
       nome: nomeUsuario,

@@ -32,7 +32,14 @@ class RepositorioGrupos extends RepositorioNeDB {
     }
 
     // 4. Se não encontrou, cria um novo grupo
-    const nomeGrupo = dadosGrupo.nome || `Grupo_${idGrupo.substring(0, 6)}`; // Usa nome fornecido ou gera padrão
+    let nomeGrupo = dadosGrupo.nome;
+    if (!nomeGrupo) {
+        if (idGrupo && typeof idGrupo === 'string' && idGrupo.length >= 6) {
+            nomeGrupo = `Grupo_${idGrupo.substring(0, 6)}`;
+        } else {
+            nomeGrupo = 'GrupoDesconhecido';
+        }
+    }
     const novoGrupo = {
       id: idGrupo,
       title: nomeGrupo, // Usa 'title' para consistência com o schema anterior

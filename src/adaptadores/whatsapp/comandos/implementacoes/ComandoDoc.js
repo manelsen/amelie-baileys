@@ -58,9 +58,9 @@ const criarComandoDoc = (dependencias) => {
       const feedbackMsg = `📄 O processamento de documentos foi ${mensagemStatus} para este chat.`;
 
       // *** Adicionar log INFO antes de tentar enviar ***
-      
+      // registrador.info(`[CmdDoc] Tentando enviar feedback para o usuário...`);
       await servicoMensagem.enviarResposta(mensagem, feedbackMsg);
-      
+      // registrador.info(`[CmdDoc] Feedback enviado.`);
 
       return Resultado.sucesso(true); // Indicar sucesso da execução do comando
 

@@ -10,30 +10,36 @@ const { obterOuCriarUsuario } = require('../dominio/OperacoesChat');
  * @param {string} nomeFuncionalidade - Nome da chave de configuração a ser verificada (ex: 'mediaAudio', 'mediaDoc').
  * @returns {Promise<Resultado>} Resultado.sucesso({ chat, config, remetente }) ou Resultado.falha(erro).
  */
-const inicializarProcessamento = async (dependencias, mensagem, chatId, nomeFuncionalidade) => {
+const inicializarProcessamento = async (dependencias, mensagemMapeada, chatId, nomeFuncionalidade) => {
   const { gerenciadorConfig, clienteWhatsApp, registrador } = dependencias;
   try {
-    const chat = await mensagem.getChat();
     const config = await gerenciadorConfig.obterConfig(chatId);
 
     if (!config || !config[nomeFuncionalidade]) {
       const erroMsg = `Processamento de ${nomeFuncionalidade} desabilitado para este chat.`;
-      registrador.info(`[InitProcess] ${erroMsg} (${chatId})`);
+      // registrador.info(`[InitProcess] ${erroMsg} (${chatId})`); // LOG REMOVIDO PARA LIMPEZA
       return Resultado.falha(new Error(erroMsg));
     }
 
     const resultadoRemetente = await obterOuCriarUsuario(gerenciadorConfig, clienteWhatsApp, registrador)(
-      mensagem.author || mensagem.from,
-      chat
+      mensagemMapeada.remetenteId,
+      { 
+          id: { _serialized: chatId || 'unknown' }, 
+          isGroup: (chatId && typeof chatId === 'string') ? chatId.endsWith('@g.us') : false 
+      }, // Mock de chat object para OperacoesChat
+      mensagemMapeada // Passar a mensagem para obter o pushName
     );
 
     if (!resultadoRemetente.sucesso) {
       registrador.error(`[InitProcess] Falha ao obter remetente: ${resultadoRemetente.erro?.message} (${chatId})`);
-      // Não lançar erro aqui, retornar falha controlada
       return Resultado.falha(resultadoRemetente.erro || new Error("Falha ao obter remetente"));
     }
 
-    return Resultado.sucesso({ chat, config, remetente: resultadoRemetente.dados });
+    return Resultado.sucesso({ 
+        config, 
+        remetente: resultadoRemetente.dados,
+        chat: { id: { _serialized: chatId || 'unknown' }, isGroup: (chatId && typeof chatId === 'string') ? chatId.endsWith('@g.us') : false }
+    });
 
   } catch (erro) {
     registrador.error(`[InitProcess] Erro inesperado na inicialização: ${erro.message}`, erro);
@@ -49,14 +55,20 @@ const inicializarProcessamento = async (dependencias, mensagem, chatId, nomeFunc
  * @param {Function} funcaoCore - Função async (transacao) => Resultado que contém a lógica específica.
  * @returns {Promise<Resultado>} Resultado da funcaoCore ou Resultado.falha.
  */
-const gerenciarCicloVidaTransacao = async (dependencias, mensagem, chat, funcaoCore) => {
+const gerenciarCicloVidaTransacao = async (dependencias, mensagemMapeada, chatId, funcaoCore) => {
   const { gerenciadorTransacoes, registrador, servicoMensagem } = dependencias;
   let transacaoId = null;
   let transacao = null;
 
   try {
     // 1. Criar Transação
-    const resultadoTransacao = await gerenciadorTransacoes.criarTransacao(mensagem, chat);
+    const resultadoTransacao = await gerenciadorTransacoes.criarTransacao(
+      mensagemMapeada, 
+      { 
+          id: { _serialized: chatId || 'unknown' }, 
+          isGroup: (chatId && typeof chatId === 'string') ? chatId.endsWith('@g.us') : false 
+      }
+    );
     if (!resultadoTransacao || !resultadoTransacao.sucesso) {
       const erroMsg = `Falha ao criar transação: ${resultadoTransacao?.erro?.message || 'Resultado inválido'}`;
       registrador.error(`[TxLifecycle] ${erroMsg}`);

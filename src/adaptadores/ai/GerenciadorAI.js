@@ -24,6 +24,7 @@ const {
 } = require('../../config/InstrucoesSistema');
 const { salvarConteudoBloqueado } = require('../../utilitarios/ArquivoUtils');
 const { Resultado } = require('../../utilitarios/Ferrovia');
+const { criarCircuitBreaker } = require('./CircuitBreaker');
 
 // --- Constantes e Configurações ---
 const DEFAULT_MODEL = "gemini-2.0-flash";
@@ -110,40 +111,7 @@ const criarChaveCache = async (tipo, payload, config) => {
   return `${tipo}_${conteudoHash}_${configHash}`;
 };
 
-// --- Lógica do Circuit Breaker (Funcional) ---
-
-const estadoInicialCircuitBreaker = () => ({
-  falhas: 0,
-  ultimaFalha: 0,
-  estado: 'FECHADO', // FECHADO, ABERTO, SEMI_ABERTO
-});
-
-const registrarSucessoCB = (estadoCB) => ({
-  ...estadoCB,
-  falhas: 0,
-  estado: 'FECHADO',
-});
-
-const registrarFalhaCB = (estadoCB) => {
-  const novoEstado = { ...estadoCB, falhas: estadoCB.falhas + 1, ultimaFalha: Date.now() };
-  if (novoEstado.falhas >= CIRCUIT_BREAKER_LIMITE_FALHAS) {
-    novoEstado.estado = 'ABERTO';
-  }
-  return novoEstado;
-};
-
-const podeExecutarCB = (estadoCB) => {
-  if (estadoCB.estado === 'FECHADO') return { podeExecutar: true, novoEstado: estadoCB };
-  if (estadoCB.estado === 'ABERTO') {
-    if (Date.now() - estadoCB.ultimaFalha > CIRCUIT_BREAKER_TEMPO_RESET_MS) {
-      // Transição para SEMI_ABERTO ao tentar executar
-      return { podeExecutar: true, novoEstado: { ...estadoCB, estado: 'SEMI_ABERTO' } };
-    }
-    return { podeExecutar: false, novoEstado: estadoCB };
-  }
-  // No estado SEMI_ABERTO, permite a execução (o resultado atualizará o estado)
-  return { podeExecutar: true, novoEstado: estadoCB };
-};
+// Circuit Breaker foi extraído para CircuitBreaker.js (Strangler Fig Pattern)
 
 // --- Fábrica do Adaptador AI ---
 
@@ -172,7 +140,12 @@ const criarAdaptadorAI = (dependencias) => {
     maxConcurrent: RATE_LIMITER_MAX_CONCORRENTE,
     minTime: RATE_LIMITER_MIN_TEMPO_MS
   });
-  let estadoCB = estadoInicialCircuitBreaker(); // Estado mutável do circuit breaker
+  
+  // Circuit Breaker usando módulo extraído (Strangler Fig Pattern)
+  const circuitBreaker = criarCircuitBreaker({
+    limiteFalhas: CIRCUIT_BREAKER_LIMITE_FALHAS,
+    tempoResetMs: CIRCUIT_BREAKER_TEMPO_RESET_MS
+  });
 
   // Cache para instâncias de modelo (evita recriar para mesma config)
   const cacheModelos = new NodeCache({ stdTTL: 3600, maxKeys: 50, useClones: false });
@@ -215,10 +188,8 @@ const criarAdaptadorAI = (dependencias) => {
   const executarComResiliencia = async (nomeOperacao, funcaoApi, timeoutMs = TIMEOUT_API_GERAL_MS) => {
     let tentativas = 0;
     while (tentativas < MAX_TENTATIVAS_API) {
-      const { podeExecutar, novoEstado } = podeExecutarCB(estadoCB);
-      estadoCB = novoEstado; // Atualiza estado (SEMI_ABERTO)
-
-      if (!podeExecutar) {
+      // Usa a nova interface do Circuit Breaker extraído
+      if (!circuitBreaker.podeExecutar()) {
         const erroCB = new Error("Serviço de IA temporariamente indisponível (Circuit Breaker).");
         registrador.warn(`[${nomeOperacao}] Circuit Breaker ABERTO. Requisição bloqueada.`);
         return Resultado.falha(erroCB); // Retorna falha
@@ -234,7 +205,7 @@ const criarAdaptadorAI = (dependencias) => {
         const resultadoApi = await Promise.race([promessaResultado, promessaTimeout]);
 
         // Sucesso: atualiza CB e retorna Resultado.sucesso
-        estadoCB = registrarSucessoCB(estadoCB);
+        circuitBreaker.registrarSucesso();
         return Resultado.sucesso(resultadoApi);
 
       } catch (erro) {

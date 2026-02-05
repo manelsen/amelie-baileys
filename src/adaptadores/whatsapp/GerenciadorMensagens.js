@@ -147,6 +147,8 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
         const errosSilenciosos = [
           "Mensagem duplicada",
           "Mensagem de sistema",
+          "Mensagem de grupo ignorada", // ADICIONADO
+          "Mensagem de status ignorada", // ADICIONADO
           "Não atende critérios para resposta em grupo",
           "Transcrição de áudio desabilitada",
           "Descrição de imagem desabilitada",
@@ -162,12 +164,12 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
          const ehVideoGrande = erroMsg?.includes("Vídeo muito grande");
 
          if (!ehErroSilencioso && !ehVideoGrande) {
-           // Logar apenas erros que não são esperados/configurados
-           registrador.error(`[MsgProc] Falha inesperada no pipeline: ${erroMsg}`);
-         } else {
-            // Opcional: Logar falhas esperadas como 'warn' ou 'info' se desejado para depuração
-            // registrador.warn(`[MsgProc] Falha esperada no pipeline: ${erroMsg}`);
-         }
+        // Logar apenas erros que não são esperados/configurados
+        registrador.error(`[MsgProc] Falha inesperada no pipeline: ${erroMsg}`);
+    } else {
+        // Silenciar logs de erros esperados (como grupo)
+        // registrador.debug(`[MsgProc] Falha esperada: ${erroMsg}`);
+    }
          return false; // Indica que o processamento parou devido a uma falha (esperada ou não)
        }
      } catch (erro) {

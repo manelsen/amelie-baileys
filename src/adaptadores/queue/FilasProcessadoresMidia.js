@@ -41,6 +41,38 @@ const FilasProcessadoresMidia = {
   }),
 
   /**
+   * Processa um áudio com o modelo de IA
+   */
+  processarAudio: _.curry(async (gerenciadorAI, registrador, audioData, audioId, config) => {
+    // Validar dados de entrada
+    if (!audioData || !audioData.data) {
+      return Resultado.falha(new Error("Dados do áudio inválidos ou ausentes"));
+    }
+
+    // Chamar a função refatorada que retorna Promise<Resultado>
+    const resultadoAI = await gerenciadorAI.processarAudio(audioData, audioId, config);
+
+    return resultadoAI;
+  }),
+
+  /**
+   * Processa um documento com o modelo de IA
+   */
+  processarDocumento: _.curry(async (gerenciadorAI, registrador, docData, prompt, config) => {
+    // Validar dados de entrada
+    if (!docData || !docData.data) {
+      return Resultado.falha(new Error("Dados do documento inválidos ou ausentes"));
+    }
+
+    // Usar processarDocumentoInline por padrão para PDFs pequenos (Buffer)
+    // O GerenciadorAI decide se usa Inline ou Arquivo baseado no que recebe, 
+    // mas aqui estamos recebendo o buffer (docData).
+    const resultadoAI = await gerenciadorAI.processarDocumentoInline(docData, prompt, config);
+
+    return resultadoAI;
+  }),
+
+  /**
    * Processa um vídeo com o modelo de IA (incluindo upload e análise)
    * @param {Object} gerenciadorAI - Gerenciador de IA
    * @param {Object} registrador - Logger

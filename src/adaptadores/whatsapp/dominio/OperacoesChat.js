@@ -50,7 +50,7 @@ const verificarRespostaGrupo = _.curry(async (clienteWhatsApp, dados) => {
 
 
 // Obter ou criar usuário
-const obterOuCriarUsuario = _.curry(async (gerenciadorConfig, clienteWhatsApp, registrador, remetenteIdSerializado, chat) => { // Mudança: Recebe remetenteIdSerializado
+const obterOuCriarUsuario = _.curry(async (gerenciadorConfig, clienteWhatsApp, registrador, remetenteIdSerializado, chat, mensagem) => { // Adicionado: mensagem
   try {
     // Verifica se o cliente WhatsApp está disponível
     if (!clienteWhatsApp || !clienteWhatsApp.cliente) {
@@ -58,56 +58,37 @@ const obterOuCriarUsuario = _.curry(async (gerenciadorConfig, clienteWhatsApp, r
       return Resultado.falha(new Error("Cliente WhatsApp não disponível"));
     }
 
+    // Tentar obter nome do pushName da mensagem (Baileys) ou do objeto chat
+    let nomeUsuario = mensagem?.pushName || chat?.name;
+    const nomePadrao = (remetenteIdSerializado && typeof remetenteIdSerializado === 'string') 
+        ? `Usuário${remetenteIdSerializado.substring(0, 6).replace(/[^0-9]/g, '')}`
+        : 'UsuárioDesconhecido';
+
+    if (!nomeUsuario) {
+        // Fallback: tentar buscar o contato (mockado agora)
+        try {
+            const contato = await clienteWhatsApp.cliente.getContactById(remetenteIdSerializado);
+            if (contato) {
+                nomeUsuario = contato.pushname || contato.name || contato.shortName;
+            }
+        } catch (e) {
+            // Ignora erro de busca
+        }
+    }
+
+    if (!nomeUsuario || nomeUsuario === 'undefined') {
+        nomeUsuario = nomePadrao;
+    }
+
     // Se temos gerenciadorConfig, usar o método dele
     if (gerenciadorConfig) {
-      // Busca o contato para obter o nome atualizado, se possível
-      let nomeUsuario = `Usuário${remetenteIdSerializado.substring(0, 6).replace(/[^0-9]/g, '')}`; // Nome padrão
-      try {
-        const contato = await clienteWhatsApp.cliente.getContactById(remetenteIdSerializado);
-        // Adiciona verificação extra para garantir que 'contato' não é undefined
-        if (contato) {
-          if (contato.pushname || contato.name || contato.shortName) {
-            nomeUsuario = contato.pushname || contato.name || contato.shortName;
-          }
-        } else {
-           registrador.warn(`Contato ${remetenteIdSerializado} retornado como undefined por getContactById.`);
-        }
-      } catch (erroContato) {
-         registrador.warn(`Não foi possível obter detalhes do contato ${remetenteIdSerializado} para obter nome: ${erroContato.message}`);
-      }
-
-      // Chama o método refatorado do gerenciadorConfig
       const resultadoUsuario = await gerenciadorConfig.obterOuCriarUsuario(remetenteIdSerializado, { nome: nomeUsuario });
-
-      // O tratamento de nome padrão agora deve ser feito dentro de obterOuCriarUsuario do ConfigManager ou no Repositorio
-      // Mas mantemos a verificação aqui por segurança, caso o retorno ainda seja problemático
-      if (resultadoUsuario.sucesso && (!resultadoUsuario.dados.name || resultadoUsuario.dados.name === 'undefined')) {
-         resultadoUsuario.dados.name = nomeUsuario; // Usa o nome obtido ou o padrão gerado
-      }
-
-      return resultadoUsuario; // Retorna o Resultado diretamente
-    }
-
-    // Implementação alternativa caso o gerenciadorConfig não esteja disponível
-    // A verificação do cliente já foi feita no início da função
-    const contato = await clienteWhatsApp.cliente.getContactById(remetenteIdSerializado);
-
-    // Adiciona verificação para garantir que 'contato' não é undefined
-    let nome = nomeUsuario; // Usa o nome padrão inicializado
-    if (contato) {
-       nome = contato.pushname || contato.name || contato.shortName || nomeUsuario; // Usa nome do contato ou fallback para o padrão
-    } else {
-       registrador.warn(`[Fallback] Contato ${remetenteIdSerializado} retornado como undefined por getContactById.`);
-    }
-
-    if (!nome || nome.trim() === '' || nome === 'undefined') {
-      const idSufixo = remetenteIdSerializado.substring(0, 6).replace(/[^0-9]/g, '');
-      nome = `Usuário${idSufixo}`;
+      return resultadoUsuario;
     }
 
     return Resultado.sucesso({
       id: remetenteIdSerializado,
-      name: nome,
+      name: nomeUsuario,
       joinedAt: new Date()
     });
   } catch (erro) {
@@ -117,7 +98,12 @@ const obterOuCriarUsuario = _.curry(async (gerenciadorConfig, clienteWhatsApp, r
     } else {
       registrador.error(`Erro inesperado ao obter informações do usuário ${remetenteIdSerializado}: ${erro.message}`, erro); // Log completo para outros erros
     }
-    const idSufixo = remetenteIdSerializado.substring(0, 6).replace(/[^0-9]/g, '');
+    
+    // Correção segura para evitar erro de substring em caso de falha
+    const idSufixo = (remetenteIdSerializado && typeof remetenteIdSerializado === 'string') 
+        ? remetenteIdSerializado.substring(0, 6).replace(/[^0-9]/g, '')
+        : 'Desconhecido';
+
     return Resultado.sucesso({
       id: remetenteIdSerializado,
       name: `Usuário${idSufixo}`,

@@ -24,7 +24,8 @@ moment.tz.setDefault("America/Sao_Paulo");
 // Importar módulos da aplicação
 const ConfigManager = require('./config/ConfigManager');
 
-const ClienteWhatsApp = require('./adaptadores/whatsapp/ClienteWhatsApp');
+// const ClienteWhatsApp = require('./adaptadores/whatsapp/ClienteWhatsApp'); // Comentado para migração
+const ClienteBaileys = require('./adaptadores/whatsapp/ClienteBaileys'); // Novo cliente
 const criarAdaptadorAI = require('./adaptadores/ai/GerenciadorAI'); // Importar a fábrica
 const GerenciadorMensagens = require('./adaptadores/whatsapp/AdaptadorGerenciadorMensagens');
 const GerenciadorNotificacoes = require('./adaptadores/whatsapp/GerenciadorNotificacoes');
@@ -34,7 +35,7 @@ const criarServicoMensagem = require('./servicos/ServicoMensagem');
 
 
 // Configurações
-const BOT_NAME = process.env.BOT_NAME || 'Amélie';
+const BOT_NAME = process.env.BOT_NAME || 'Beatrice';
 const API_KEY = process.env.API_KEY;
 const nivel_debug = process.env.LOG_LEVEL || 'info';
 
@@ -250,39 +251,37 @@ GerenciadorTransacoes.prototype.limparTransacoesIncompletas = async function() {
 };
 
 // Inicializar os componentes do sistema
-logger.info('🤖 Iniciando Amélie - Assistente Virtual de IA para WhatsApp');
+logger.info('Iniciando Amélie - Assistente Virtual de IA para WhatsApp');
 
 // 1. Inicializar gerenciador de configurações
 const configManager = new ConfigManager(logger, path.join(process.cwd(), 'db'));
-logger.info('⚙️ Gerenciador de configurações inicializado');
+logger.info('Gerenciador de configurações inicializado');
 
-// 2. Inicializar o cliente WhatsApp
-const clienteWhatsApp = new ClienteWhatsApp(logger, {
-  maxTentativasReconexao: 5,
-  clienteId: 'principal',
-  diretorioTemp: './temp'
+// 2. Inicializar o cliente WhatsApp (Agora Baileys)
+const clienteWhatsApp = new ClienteBaileys(logger, {
+  clienteId: 'principal'
 });
-logger.info('📱 Cliente WhatsApp inicializado');
+logger.info('Cliente Baileys inicializado');
 
 // 3. Inicializar o gerenciador de notificações
 const gerenciadorNotificacoes = new GerenciadorNotificacoes(logger, './temp');
-logger.info('🔔 Gerenciador de notificações inicializado');
+logger.info('Gerenciador de notificações inicializado');
 
 // 4. Inicializar o gerenciador de IA usando a fábrica
 const gerenciadorAI = criarAdaptadorAI({ registrador: logger, apiKey: API_KEY });
-logger.info('🧠 Gerenciador de IA inicializado');
+logger.info('Gerenciador de IA inicializado');
 
 // 5. Inicializar o gerenciador de transações
 const gerenciadorTransacoes = new GerenciadorTransacoes(logger, path.join(process.cwd(), 'db'));
-logger.info('💼 Gerenciador de transações inicializado');
+logger.info('Gerenciador de transações inicializado');
 
 // 5.5 Inicializar o serviço de mensagens
 const servicoMensagem = criarServicoMensagem(logger, clienteWhatsApp, gerenciadorTransacoes);
-logger.info('💬 Serviço de mensagens inicializado');
+logger.info('Serviço de mensagens inicializado');
 
-// 8. Inicializar o monitor de saúde (mas não ativá-lo ainda)
-const monitorSaude = require('./monitoramento/MonitorSaude').criar(logger, clienteWhatsApp);
-logger.info('❤️‍🩹 Monitor de saúde inicializado');
+// 8. Inicializar o monitor de saúde (DESATIVADO PARA BAILEYS)
+// const monitorSaude = require('./monitoramento/MonitorSaude').criar(logger, clienteWhatsApp);
+// logger.info('❤️‍🩹 Monitor de saúde inicializado');
 
 // Variáveis para armazenar componentes que serão inicializados depois
 let filasMidia = null;
@@ -290,11 +289,11 @@ let gerenciadorMensagens = null;
 
 // Configurar eventos do cliente WhatsApp
 clienteWhatsApp.on('pronto', async () => {
-  logger.info('📱 Cliente WhatsApp pronto e conectado!');
+  logger.info('Cliente WhatsApp pronto e conectado!');
 
   // 6. Agora que o cliente está pronto, inicializar o processador de filas de mídia
   filasMidia = inicializarFilasMidia(logger, gerenciadorAI, configManager, servicoMensagem);
-  logger.info('🔄 Filas de mídia inicializadas');
+  logger.info('Filas de mídia inicializadas');
 
   // 7. Inicializar o gerenciador de mensagens com as filas já inicializadas
   gerenciadorMensagens = new GerenciadorMensagens(
@@ -306,20 +305,20 @@ clienteWhatsApp.on('pronto', async () => {
     gerenciadorTransacoes,
     servicoMensagem
   );
-  logger.info('💬 Gerenciador de mensagens inicializado');
+  logger.info('Gerenciador de mensagens inicializado');
 
   // Registrar o gerenciador de mensagens como handler
   gerenciadorMensagens.registrarComoHandler(clienteWhatsApp);
 
   // Iniciar o monitor de saúde
-  monitorSaude.parar(); // Garantir que esteja parado antes
-  monitorSaude.iniciar();
+  // monitorSaude.parar(); // Garantir que esteja parado antes
+  // monitorSaude.iniciar();
 
   // Limpar transações problemáticas antes de processar
   await gerenciadorTransacoes.limparTransacoesIncompletas();
 
   // Processar notificações pendentes
-  const resultadoNotificacoes = await gerenciadorNotificacoes.processar(clienteWhatsApp.cliente);
+  const resultadoNotificacoes = await gerenciadorNotificacoes.processar(clienteWhatsApp);
   const notificacoesProcessadas = resultadoNotificacoes.sucesso ? resultadoNotificacoes.dados : 0;
 
   // Processar transações pendentes
@@ -340,7 +339,7 @@ setInterval(async () => {
       await gerenciadorTransacoes.limparTransacoesIncompletas();
 
       // Processar notificações pendentes
-      const resultadoNotificacoes = await gerenciadorNotificacoes.processar(clienteWhatsApp.cliente);
+      const resultadoNotificacoes = await gerenciadorNotificacoes.processar(clienteWhatsApp);
       const notificacoesProcessadas = resultadoNotificacoes.sucesso ? resultadoNotificacoes.dados : 0;
 
       // Processar transações pendentes
@@ -380,6 +379,8 @@ setInterval(async () => {
 
 // Tratamento de erros não capturados
 process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection DETALHADO:', reason);
+  if (reason && reason.stack) console.error(reason.stack);
   logger.error('Unhandled Rejection at:', { promise, reason });
 });
 

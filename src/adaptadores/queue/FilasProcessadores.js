@@ -138,6 +138,7 @@ const FilasProcessadores = {
             imageData: dadosJob.imageData,
             chatId: dadosJob.chatId,
             messageId: dadosJob.messageId,
+            messageKey: dadosJob.messageKey, // ADICIONADO
             mimeType: dadosJob.mimeType,
             userPrompt: dadosJob.userPrompt,
             senderNumber: dadosJob.senderNumber,
@@ -241,6 +242,8 @@ const FilasProcessadores = {
           resposta: resposta, // Passar a string de resposta
           chatId: dados.chatId,
           messageId: dados.messageId,
+          // REPASSAR MESSAGE KEY
+          messageKey: dados.messageKey, 
           senderNumber: dados.senderNumber,
           transacaoId: dados.transacaoId,
           remetenteName: dados.remetenteName,
@@ -301,6 +304,7 @@ const FilasProcessadores = {
             imageData: dadosJob.imageData,
             chatId: dadosJob.chatId,
             messageId: dadosJob.messageId,
+            messageKey: dadosJob.messageKey, // ADICIONADO
             mimeType: dadosJob.mimeType,
             userPrompt: dadosJob.userPrompt,
             senderNumber: dadosJob.senderNumber,
@@ -349,6 +353,133 @@ const FilasProcessadores = {
   }),
 
   /**
+   * Criar processador principal de áudio
+   */
+  criarProcessadorPrincipalAudio: _.curry((registrador, gerenciadorConfig, gerenciadorAI, processarResultado, notificarErro) => async (job) => {
+    const { audioData, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId, remetenteName } = job.data;
+    const audioId = transacaoId || `audio_${Date.now()}`;
+
+    // Funções auxiliares e wrappers
+    const obterConfig = FilasConfiguracao.obterConfig(gerenciadorConfig, registrador);
+    const processarAudioTentativa = Operacoes.tentar(FilasProcessadoresMidia.processarAudio(gerenciadorAI, registrador));
+    const processarResultadoTentativa = Operacoes.tentar(processarResultado);
+
+    return Trilho.encadear(
+        // 1. Log inicial e setup
+        async () => {
+             registrador.info(`Áudio na fila - ${transacaoId || 'sem_id'}`);
+             return Resultado.sucesso(job.data);
+        },
+
+        // 2. Obter configuração
+        async (dadosJob) => {
+             const resultadoConfig = await obterConfig(chatId, 'audio');
+             const configFinal = resultadoConfig.sucesso ? resultadoConfig.dados : {};
+             return Resultado.sucesso({ dados: dadosJob, config: configFinal });
+        },
+
+        // 3. Processar áudio
+        async (contexto) => {
+            const { dados, config } = contexto;
+            // Configurar contexto de origem para logs/safety
+            const configComOrigem = {
+                ...config,
+                tipoMidia: 'audio',
+                dadosOrigem: { tipo: 'Fila Áudio', nome: remetenteName || 'Desconhecido', id: transacaoId || 'sem_id' }
+            };
+
+            const resultadoProc = await processarAudioTentativa(dados.audioData, audioId, configComOrigem);
+            
+            if (!resultadoProc.sucesso) return resultadoProc;
+            
+            return Resultado.sucesso({ ...contexto, resposta: resultadoProc.dados });
+        },
+
+        // 4. Enviar resultado
+        async (contextoComResposta) => {
+            const { dados, resposta } = contextoComResposta;
+            
+            const resultadoCallback = await processarResultadoTentativa({
+                resposta: resposta,
+                chatId: dados.chatId,
+                messageId: dados.messageId,
+                senderNumber: dados.senderNumber,
+                transacaoId: dados.transacaoId,
+                remetenteName: dados.remetenteName,
+                tipo: 'audio'
+            });
+
+            return Resultado.sucesso({ success: true });
+        }
+    )()
+    .catch(erro => {
+        registrador.error(`[Audio] Erro no processamento: ${erro.message}`, { erro, jobId: job.id });
+        notificarErro('audio', erro, { chatId, messageId, senderNumber, transacaoId, remetenteName });
+        throw erro;
+    });
+  }),
+
+  /**
+   * Criar processador principal de documento
+   */
+  criarProcessadorPrincipalDocumento: _.curry((registrador, gerenciadorConfig, gerenciadorAI, processarResultado, notificarErro) => async (job) => {
+    const { docData, chatId, messageId, messageKey, mimeType, userPrompt, senderNumber, transacaoId, remetenteName } = job.data;
+
+    const obterConfig = FilasConfiguracao.obterConfig(gerenciadorConfig, registrador);
+    const processarDocumentoTentativa = Operacoes.tentar(FilasProcessadoresMidia.processarDocumento(gerenciadorAI, registrador));
+    const processarResultadoTentativa = Operacoes.tentar(processarResultado);
+
+    return Trilho.encadear(
+        async () => {
+             registrador.info(`Documento na fila - ${transacaoId || 'sem_id'}`);
+             return Resultado.sucesso(job.data);
+        },
+        async (dadosJob) => {
+             const resultadoConfig = await obterConfig(chatId, 'documento'); // Usar 'documento' aqui (mapeia para mediaDocumento)
+             // O helper obterConfig já deve tratar o mapeamento se necessário, ou usamos o padrão.
+             // Vamos assumir que 'documento' é o tipo para config
+             const configFinal = resultadoConfig.sucesso ? resultadoConfig.dados : {};
+             return Resultado.sucesso({ dados: dadosJob, config: configFinal });
+        },
+        async (contexto) => {
+            const { dados, config } = contexto;
+            const configComOrigem = {
+                ...config,
+                tipoMidia: 'documento',
+                dadosOrigem: { tipo: 'Fila Documento', nome: remetenteName || 'Desconhecido', id: transacaoId || 'sem_id' }
+            };
+
+            const resultadoProc = await processarDocumentoTentativa(dados.docData, dados.userPrompt, configComOrigem);
+            
+            if (!resultadoProc.sucesso) return resultadoProc;
+            
+            return Resultado.sucesso({ ...contexto, resposta: resultadoProc.dados });
+        },
+        async (contextoComResposta) => {
+            const { dados, resposta } = contextoComResposta;
+            
+            const resultadoCallback = await processarResultadoTentativa({
+                resposta: resposta,
+                chatId: dados.chatId,
+                messageId: dados.messageId,
+                messageKey: dados.messageKey, // Repassar messageKey para citação
+                senderNumber: dados.senderNumber,
+                transacaoId: dados.transacaoId,
+                remetenteName: dados.remetenteName,
+                tipo: 'documento'
+            });
+
+            return Resultado.sucesso({ success: true });
+        }
+    )()
+    .catch(erro => {
+        registrador.error(`[Documento] Erro no processamento: ${erro.message}`, { erro, jobId: job.id });
+        notificarErro('documento', erro, { chatId, messageId, senderNumber, transacaoId, remetenteName });
+        throw erro;
+    });
+  }),
+
+  /**
    * Criar processador de upload de vídeo
    * @param {Object} registrador - Logger
    * @param {Object} gerenciadorAI - Gerenciador de IA
@@ -357,7 +488,7 @@ const FilasProcessadores = {
    * @returns {Function} Função processadora
    */
   criarProcessadorUploadVideo: _.curry((registrador, gerenciadorAI, filas, notificarErro) => async (job) => {
-    const { tempFilename, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId, remetenteName } = job.data;
+    const { tempFilename, chatId, messageId, messageKey, mimeType, userPrompt, senderNumber, transacaoId, remetenteName } = job.data;
 
     // Envolver chamadas externas com Operacoes.tentar para robustez
     // const uploadGoogleTentativa = Operacoes.tentar(gerenciadorAI.uploadArquivoGoogle); // REMOVIDO TEMPORARIAMENTE
@@ -420,6 +551,7 @@ const FilasProcessadores = {
             tempFilename: dadosComUpload.tempFilename, // Garante que tempFilename está nos dados
             chatId: dadosComUpload.chatId,
             messageId: dadosComUpload.messageId,
+            messageKey: dadosComUpload.messageKey, // ADICIONADO
             mimeType: dadosComUpload.mimeType,
             userPrompt: dadosComUpload.userPrompt,
             senderNumber: dadosComUpload.senderNumber,
@@ -472,7 +604,7 @@ const FilasProcessadores = {
     // registrador.info(`[Processamento Vídeo - INÍCIO] Recebido Job ${job.id}. job.data: ${JSON.stringify(job.data)}`);
 
     const {
-      fileName, fileUri, tempFilename, chatId, messageId,
+      fileName, fileUri, tempFilename, chatId, messageId, messageKey,
       mimeType, userPrompt, senderNumber, transacaoId,
       uploadTimestamp, remetenteName, tentativas = 0
     } = job.data;
@@ -534,7 +666,11 @@ const FilasProcessadores = {
           if (currentTentativas < maxTentativas) {
             
             const backoffDelay = Math.min(15000, 500 * Math.pow(2, currentTentativas));
-            // Logs removidos
+            registrador.info(`[Processamento Vídeo] Arquivo ainda processando. Aguardando ${backoffDelay}ms antes de reagendar...`);
+
+            // IMPLEMENTAÇÃO DE DELAY REAL (Bloqueante mas seguro para evitar loop infinito na BetterQueue)
+            // Como nossa fila em memória não suporta delay nativo no .add(), esperamos aqui mesmo.
+            await new Promise(resolve => setTimeout(resolve, backoffDelay));
 
             let resultadoReagendar;
             try {
@@ -542,7 +678,7 @@ const FilasProcessadores = {
               const jobReagendado = await filas.video.processamento.add('processar-video', {
                 ...job.data,
                 tentativas: currentTentativas + 1
-              }, { delay: backoffDelay });
+              }); // Delay removido das opções pois fazemos manual agora
               resultadoReagendar = Resultado.sucesso(jobReagendado);
             } catch (erroDireto) {
               registrador.error(`[Processamento Vídeo] ERRO no bloco CATCH ao tentar reagendar Job ${job.id} (chamada direta): ${erroDireto.message}`, erroDireto);
@@ -577,6 +713,7 @@ const FilasProcessadores = {
             tempFilename: dadosComArquivo.tempFilename,
             chatId: dadosComArquivo.chatId,
             messageId: dadosComArquivo.messageId,
+            messageKey: dadosComArquivo.messageKey, // ADICIONADO
             mimeType: dadosComArquivo.mimeType,
             userPrompt: dadosComArquivo.userPrompt,
             senderNumber: dadosComArquivo.senderNumber,
@@ -625,7 +762,7 @@ const FilasProcessadores = {
    */
   criarProcessadorAnaliseVideo: _.curry((registrador, gerenciadorConfig, gerenciadorAI, processarResultado, notificarErro) => async (job) => {
     const {
-      fileName, tempFilename, chatId, messageId, mimeType, userPrompt, senderNumber,
+      fileName, tempFilename, chatId, messageId, messageKey, mimeType, userPrompt, senderNumber,
       transacaoId, fileState, fileUri, fileMimeType, remetenteName
     } = job.data;
 
@@ -719,6 +856,7 @@ const FilasProcessadores = {
           resposta,
           chatId: dados.chatId,
           messageId: dados.messageId,
+          messageKey: dados.messageKey, // ADICIONADO: Repassar messageKey
           senderNumber: dados.senderNumber,
           transacaoId: dados.transacaoId,
           remetenteName: dados.remetenteName,
@@ -758,7 +896,7 @@ const FilasProcessadores = {
    * Criar processador principal de vídeo (compatibilidade)
    */
   criarProcessadorPrincipalVideo: _.curry((registrador, filas, notificarErro) => async (job) => {
-    const { tempFilename, chatId, messageId, mimeType, userPrompt, senderNumber, transacaoId, remetenteName } = job.data;
+    const { tempFilename, chatId, messageId, messageKey, mimeType, userPrompt, senderNumber, transacaoId, remetenteName } = job.data;
 
     // Envolver adição à fila com tentativa
     // const addUploadVideoTentativa = Operacoes.tentar(filas.video.upload.add); // REMOVIDO TEMPORARIAMENTE
@@ -781,6 +919,7 @@ const FilasProcessadores = {
             tempFilename: dadosJob.tempFilename,
             chatId: dadosJob.chatId,
             messageId: dadosJob.messageId,
+            messageKey: dadosJob.messageKey, // ADICIONADO messageKey
             mimeType: dadosJob.mimeType,
             userPrompt: dadosJob.userPrompt,
             senderNumber: dadosJob.senderNumber,

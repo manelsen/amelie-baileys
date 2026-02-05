@@ -156,7 +156,11 @@ class GerenciadorNotificacoes {
         
         // Enviando mensagem
         try {
-          await cliente.sendMessage(dados.senderNumber, dados.message);
+          if (typeof cliente.enviarMensagem === 'function') {
+             await cliente.enviarMensagem(dados.senderNumber, dados.message);
+          } else {
+             await cliente.sendMessage(dados.senderNumber, dados.message);
+          }
           registrador.info(`[Notif] ✅ Notificação pendente enviada.`); // Removido senderNumber
           
           // Remover arquivo após processamento

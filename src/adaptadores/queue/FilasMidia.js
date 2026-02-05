@@ -32,10 +32,10 @@ const inicializarFilasMidia = (registrador, gerenciadorAI, gerenciadorConfig, se
   registrador.info('✨ Inicializando sistema funcional de filas de mídia...');
 
   // Criar configuração do Redis
-  const redisConfig = FilasConfiguracao.criarConfigRedis();
+  // const redisConfig = FilasConfiguracao.criarConfigRedis(); // Redis removido
 
   // Criar configuração das filas
-  const configFilas = FilasConfiguracao.criarConfigFilas(redisConfig);
+  const configFilas = FilasConfiguracao.criarConfigFilas(); // Sem argumentos
 
   // Criar estrutura de filas
   const resultadoFilas = FilasCriadores.criarFilas(configFilas);
@@ -77,6 +77,23 @@ const inicializarFilasMidia = (registrador, gerenciadorAI, gerenciadorConfig, se
       id: { _serialized: resultado.messageId || `msg_${Date.now()}` },
       body: resultado.userPrompt || '',
 
+      // Usar a chave original se disponível (CRÍTICO para reply)
+      // Garantir que remoteJid esteja presente e que exista um objeto 'message' para o Baileys gerar a citação
+      _data: resultado.messageKey ? { 
+          key: {
+            ...resultado.messageKey,
+            remoteJid: resultado.messageKey.remoteJid || resultado.messageKey.remote
+          }, 
+          // MOCK IMPORTANTE: O Baileys precisa de 'message' para gerar o quoted.
+          // Como perdemos o objeto original na fila, reconstruímos um fake com o texto do prompt.
+          message: {
+            conversation: resultado.userPrompt || 'Mídia processada'
+          },
+          notifyName: resultado.remetenteName || 'Usuário' 
+      } : {
+        notifyName: resultado.remetenteName || 'Usuário'
+      },
+
       // Método getChat simplificado
       getChat: async () => ({
         id: { _serialized: `${resultado.chatId || resultado.senderNumber}` },
@@ -87,11 +104,7 @@ const inicializarFilasMidia = (registrador, gerenciadorAI, gerenciadorConfig, se
 
       // Não implementamos reply - o servicoMensagem lidará com isso
       hasMedia: true,
-      type: tipo,
-
-      _data: {
-        notifyName: resultado.remetenteName || 'Usuário'
-      }
+      type: tipo
     };
 
     // Log detalhado antes de enviar
@@ -119,7 +132,9 @@ const inicializarFilasMidia = (registrador, gerenciadorAI, gerenciadorConfig, se
   // Objeto para armazenar callbacks
   const callbacks = {
     imagem: criarCallbackPadrao('imagem'),
-    video: criarCallbackPadrao('video')
+    video: criarCallbackPadrao('video'),
+    audio: criarCallbackPadrao('audio'),
+    documento: criarCallbackPadrao('documento')
   };
 
   // Criar funções utilitárias com contexto
@@ -168,6 +183,14 @@ const inicializarFilasMidia = (registrador, gerenciadorAI, gerenciadorConfig, se
   filas.video.principal.process('processar-video', 10,
     FilasProcessadores.criarProcessadorPrincipalVideo(registrador, filas, notificarErro));
   
+  // 3. Processadores de Áudio
+  filas.audio.principal.process('processar-audio', 20, 
+    FilasProcessadores.criarProcessadorPrincipalAudio(registrador, gerenciadorConfig, gerenciadorAI, processarResultado, notificarErro));
+
+  // 4. Processadores de Documento
+  filas.documento.principal.process('processar-documento', 10,
+    FilasProcessadores.criarProcessadorPrincipalDocumento(registrador, gerenciadorConfig, gerenciadorAI, processarResultado, notificarErro));
+  
   // Limpar tarefas antigas ou problemáticas
   FilasMonitorador.limparTrabalhosPendentes(registrador, filas)
     .catch(erro => registrador.error(`Erro ao limpar trabalhos pendentes: ${erro.message}`));
@@ -185,9 +208,21 @@ const inicializarFilasMidia = (registrador, gerenciadorAI, gerenciadorConfig, se
       registrador.info('✅ Callback de resposta para vídeos configurado');
     },
 
+    setCallbackRespostaAudio: (callback) => {
+        callbacks.audio = callback;
+        registrador.info('✅ Callback de resposta para áudios configurado');
+    },
+
+    setCallbackRespostaDocumento: (callback) => {
+        callbacks.documento = callback;
+        registrador.info('✅ Callback de resposta para documentos configurado');
+    },
+
     setCallbackRespostaUnificado: (callback) => {
       callbacks.imagem = callback;
       callbacks.video = callback;
+      callbacks.audio = callback;
+      callbacks.documento = callback;
       registrador.info('✅ Callback de resposta unificado configurado');
     },
 
@@ -204,6 +239,20 @@ const inicializarFilasMidia = (registrador, gerenciadorAI, gerenciadorConfig, se
         ...dados,
         tipo: 'video'
       });
+    },
+    
+    adicionarAudio: async (dados) => {
+        return filas.audio.principal.add('processar-audio', {
+          ...dados,
+          tipo: 'audio'
+        });
+    },
+
+    adicionarDocumento: async (dados) => {
+        return filas.documento.principal.add('processar-documento', {
+          ...dados,
+          tipo: 'documento'
+        });
     },
 
     // Limpeza de filas
