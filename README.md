@@ -75,6 +75,19 @@ Se quiser mais detalhes sobre uma imagem ou vídeo:
 2. Junto com ela, envie um comentário dizendo qual aspecto você quer que eu foque
 3. Vou gerar uma nova descrição com ênfase no que você pediu
 
+## Como funciona ⚙️
+
+Amélie foi construída com foco em **acessibilidade** e **eficiência**. Sua estrutura técnica baseia-se em:
+
+- **Processamento em Fluxo (Railway):** Utilizamos o padrão *Railway Oriented Programming* para garantir que cada mensagem seja processada com segurança, tratando erros de forma precisa sem interromper o serviço.
+- **Arquitetura Funcional:** O sistema é construído sobre fábricas de funções, garantindo um código modular, fácil de testar e manter.
+- **Filas de Processamento:** Para garantir que nenhuma mídia seja perdida, utilizamos o `Better-Queue`. Isso permite que áudios, imagens e vídeos sejam processados de forma assíncrona e organizada, respeitando os limites das APIs de IA.
+- **Pipelines Multimídia:**
+    - **Imagens e Áudios:** Processamento rápido e direto.
+    - **Vídeos e Documentos:** Fluxos robustos que incluem upload para nuvem e análise profunda para fornecer descrições detalhadas.
+
+Para saber mais sobre os detalhes técnicos, consulte a nossa [Documentação de Arquitetura](./docs/ARCHITECTURE.md).
+
 ## Grupos oficiais e contatos 👥
 
 - Grupo oficial: https://chat.whatsapp.com/C0Ys7pQ6lZH5zqDD9A8cLp

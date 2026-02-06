@@ -19,7 +19,7 @@ class GoogleFileManager {
      * Faz upload de um arquivo local para o Google AI
      */
     async upload(caminhoArquivo, opcoes) {
-        this.logger.info(`[FileManager] Fazendo upload: ${caminhoArquivo}`);
+        this.logger.info(`[Arquv] Fazendo upload: ${caminhoArquivo}`);
         return await this.executarComResiliencia(
             'uploadArquivoGoogle',
             () => this.manager.uploadFile(caminhoArquivo, opcoes),
@@ -49,10 +49,10 @@ class GoogleFileManager {
         );
 
         if (resultado.sucesso) {
-            this.logger.info(`[FileManager] Arquivo deletado: ${nomeArquivo}`);
+            this.logger.info(`[Arquv] Arquivo deletado: ${nomeArquivo}`);
             return Resultado.sucesso(true);
         } else {
-            this.logger.error(`[FileManager] Falha ao deletar ${nomeArquivo}: ${resultado.erro.message}`);
+            this.logger.error(`[Arquv] Falha ao deletar ${nomeArquivo}: ${resultado.erro.message}`);
             return Resultado.sucesso(false); // Não bloqueante
         }
     }

@@ -1,66 +1,66 @@
 /**
- * Telemetria - Sistema de monitoramento leve para Amélie (Baileys)
- * 
- * Focado apenas em métricas de runtime (RAM) e estado do Socket.
+ * Telemetria - Sistema de monitoramento leve para Amélie (Baileys) (Funcional)
  */
 
 const moment = require('moment-timezone');
 
-class Telemetria {
-    constructor(logger, config = {}) {
-        this.logger = logger;
-        this.limiteAlertaMemoria = config.limiteAlertaMemoria || 1024; // 1GB
-        this.intervalo = null;
-    }
+/**
+ * Fábrica da Telemetria
+ * @param {Object} logger 
+ * @param {Object} config 
+ */
+const criarTelemetria = (logger, config = {}) => {
+    const limiteAlertaMemoria = config.limiteAlertaMemoria || 1024; // 1GB
+    let intervalo = null;
+
+    /**
+     * Verifica o uso de memória atual
+     */
+    const verificarRecursos = () => {
+        const usoMemoria = process.memoryUsage();
+        const heapUsadoMB = Math.round(usoMemoria.heapUsed / 1024 / 1024);
+        const rssMB = Math.round(usoMemoria.rss / 1024 / 1024);
+
+        if (rssMB > limiteAlertaMemoria) {
+            logger.warn(`[Telemetria] ⚠️ Alto uso de memória: RSS ${rssMB}MB | Heap ${heapUsadoMB}MB`);
+            
+            if (global.gc) {
+                logger.info('[Telemetria] Solicitando coleta de lixo (GC)...');
+                global.gc();
+            }
+        } else {
+            logger.debug(`[Telemetria] Saúde do Sistema: RSS ${rssMB}MB | Heap ${heapUsadoMB}MB`);
+        }
+
+        return { rssMB, heapUsadoMB };
+    };
 
     /**
      * Inicia o monitoramento de recursos
      * @param {number} intervaloMs Tempo entre as checagens (default 5 min)
      */
-    iniciar(intervaloMs = 300000) {
-        this.logger.info('[Telemetria] Monitoramento de recursos iniciado.');
+    const iniciar = (intervaloMs = 300000) => {
+        logger.info('[Telemetria] Monitoramento de recursos iniciado.');
         
-        this.intervalo = setInterval(() => {
-            this.verificarRecursos();
+        intervalo = setInterval(() => {
+            verificarRecursos();
         }, intervaloMs);
 
         // Primeira verificação imediata
-        this.verificarRecursos();
-    }
+        verificarRecursos();
+    };
 
-    parar() {
-        if (this.intervalo) {
-            clearInterval(this.intervalo);
-            this.logger.info('[Telemetria] Monitoramento parado.');
+    const parar = () => {
+        if (intervalo) {
+            clearInterval(intervalo);
+            logger.info('[Telemetria] Monitoramento parado.');
         }
-    }
-
-    /**
-     * Verifica o uso de memória atual
-     */
-    verificarRecursos() {
-        const usoMemoria = process.memoryUsage();
-        const heapUsadoMB = Math.round(usoMemoria.heapUsed / 1024 / 1024);
-        const rssMB = Math.round(usoMemoria.rss / 1024 / 1024);
-
-        if (rssMB > this.limiteAlertaMemoria) {
-            this.logger.warn(`[Telemetria] ⚠️ Alto uso de memória: RSS ${rssMB}MB | Heap ${heapUsadoMB}MB`);
-            
-            if (global.gc) {
-                this.logger.info('[Telemetria] Solicitando coleta de lixo (GC)...');
-                global.gc();
-            }
-        } else {
-            this.logger.debug(`[Telemetria] Saúde do Sistema: RSS ${rssMB}MB | Heap ${heapUsadoMB}MB`);
-        }
-
-        return { rssMB, heapUsadoMB };
-    }
+    };
 
     /**
      * Gera um resumo do estado para logs ou endpoints de saúde
      */
-    obterStatusSistema() {
+    const obterStatusSistema = () => {
         return {
             uptime: process.uptime(),
             memoria: process.memoryUsage(),
@@ -68,7 +68,14 @@ class Telemetria {
             plataforma: process.platform,
             nodeVersion: process.version
         };
-    }
-}
+    };
 
-module.exports = Telemetria;
+    return {
+        iniciar,
+        parar,
+        verificarRecursos,
+        obterStatusSistema
+    };
+};
+
+module.exports = criarTelemetria;

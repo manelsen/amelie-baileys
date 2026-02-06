@@ -1,87 +1,33 @@
-// src/db/Repositorio.js
+// src/bancodedados/Repositorio.js
 /**
- * Repositorio - Interface base para acesso a dados
+ * Repositorio - Interface base funcional para acesso a dados
  * 
  * Define o contrato para todas as implementações de repositórios
- * seguindo princípios de programação funcional.
+ * seguindo princípios de programação funcional (Railway Pattern).
  */
 
-// Estrutura Resultado para tratamento funcional de erros (Padrão Ferroviário)
-const Resultado = {
-  sucesso: (dados) => ({ sucesso: true, dados, erro: null }),
-  falha: (erro) => ({ sucesso: false, dados: null, erro }),
-  
-  // Funções utilitárias para encadeamento
-  mapear: (resultado, fn) => resultado.sucesso ? Resultado.sucesso(fn(resultado.dados)) : resultado,
-  encadear: (resultado, fn) => resultado.sucesso ? fn(resultado.dados) : resultado,
-  
-  // Manipuladores de resultado
-  dobrar: (resultado, aoSucesso, aoFalhar) => 
-    resultado.sucesso ? aoSucesso(resultado.dados) : aoFalhar(resultado.erro)
-};
+const { Resultado } = require('../utilitarios/Ferrovia');
 
 /**
- * Interface base para todos os repositórios
- * Todas as operações retornam um Resultado para tratamento funcional de erros
+ * Cria uma interface de repositório padrão.
+ * Serve como base (molde) para implementações concretas (NeDB, MongoDB, etc).
+ * 
+ * @param {Object} implementacao - Objeto contendo as funções concretas
+ * @returns {Object} Interface do repositório
  */
-class Repositorio {
-  /**
-   * Encontra um único documento
-   * @param {Object} consulta - Critérios de busca
-   * @returns {Promise<Resultado>} Resultado da operação
-   */
-  async encontrarUm(consulta) {
-    throw new Error("Método encontrarUm deve ser implementado pela classe concreta");
-  }
+const criarRepositorio = (implementacao = {}) => {
+  const lancarErro = (metodo) => async () => {
+    throw new Error(`Método ${metodo} não implementado no repositório concreto.`);
+  };
 
-  /**
-   * Encontra múltiplos documentos
-   * @param {Object} consulta - Critérios de busca
-   * @param {Object} opcoes - Opções como limite, pular, ordenar
-   * @returns {Promise<Resultado>} Resultado da operação
-   */
-  async encontrar(consulta, opcoes = {}) {
-    throw new Error("Método encontrar deve ser implementado pela classe concreta");
-  }
+  return {
+    encontrarUm: implementacao.encontrarUm || lancarErro('encontrarUm'),
+    encontrar: implementacao.encontrar || lancarErro('encontrar'),
+    inserir: implementacao.inserir || lancarErro('inserir'),
+    atualizar: implementacao.atualizar || lancarErro('atualizar'),
+    remover: implementacao.remover || lancarErro('remover'),
+    contar: implementacao.contar || lancarErro('contar')
+  };
+};
 
-  /**
-   * Insere um novo documento
-   * @param {Object} documento - Documento a ser inserido
-   * @returns {Promise<Resultado>} Resultado da operação
-   */
-  async inserir(documento) {
-    throw new Error("Método inserir deve ser implementado pela classe concreta");
-  }
-
-  /**
-   * Atualiza documentos
-   * @param {Object} consulta - Critérios de busca
-   * @param {Object} atualizacao - Atualizações a aplicar
-   * @param {Object} opcoes - Opções como upsert, multi
-   * @returns {Promise<Resultado>} Resultado da operação
-   */
-  async atualizar(consulta, atualizacao, opcoes = {}) {
-    throw new Error("Método atualizar deve ser implementado pela classe concreta");
-  }
-
-  /**
-   * Remove documentos
-   * @param {Object} consulta - Critérios de busca
-   * @param {Object} opcoes - Opções como multi
-   * @returns {Promise<Resultado>} Resultado da operação
-   */
-  async remover(consulta, opcoes = {}) {
-    throw new Error("Método remover deve ser implementado pela classe concreta");
-  }
-
-  /**
-   * Conta documentos
-   * @param {Object} consulta - Critérios de busca
-   * @returns {Promise<Resultado>} Resultado da operação
-   */
-  async contar(consulta) {
-    throw new Error("Método contar deve ser implementado pela classe concreta");
-  }
-}
-
-module.exports = { Repositorio, Resultado };
+module.exports = { criarRepositorio, Resultado };

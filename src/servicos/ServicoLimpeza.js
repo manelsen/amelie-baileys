@@ -1,31 +1,24 @@
+const path = require('path');
+const LimpadorTemp = require('../utilitarios/LimpadorTemp');
+
 /**
- * Serviço de Limpeza e Manutenção Periódica
+ * Serviço de Limpeza e Manutenção Periódica (Funcional)
  */
-class ServicoLimpeza {
-    constructor(logger, componentes) {
-        this.logger = logger;
-        this.componentes = componentes;
-    }
+const criarServicoLimpeza = (logger, componentes) => {
+    const diretorioTemp = path.join(process.cwd(), 'temp');
 
-    iniciar() {
-        this.logger.info('[Limpeza] Serviço de manutenção iniciado.');
-        
-        // Loop de processamento rápido (5s)
-        setInterval(() => this.executarProcessamentoRapido(), 5000);
+    const executarLimpezaTemp = async () => {
+        await LimpadorTemp.limpar(diretorioTemp, 30, logger);
+    };
 
-        // Loop de limpeza profunda (24h)
-        setInterval(() => this.executarLimpezaProfunda(), 24 * 60 * 60 * 1000);
-    }
-
-    async executarProcessamentoRapido() {
-        const { clienteWhatsApp, gerenciadorTransacoes, gerenciadorNotificacoes, filasMidia, gerenciadorMensagens } = this.componentes;
+    const executarProcessamentoRapido = async () => {
+        const { clienteWhatsApp, gerenciadorTransacoes, gerenciadorNotificacoes, filasMidia, gerenciadorMensagens } = componentes;
 
         if (clienteWhatsApp.pronto && filasMidia && gerenciadorMensagens) {
             try {
-                // Mudar para debug para não poluir o console a cada 5s
                 const resultadoLimpeza = await gerenciadorTransacoes.limparTransacoesIncompletas();
                 if (resultadoLimpeza > 0) {
-                    this.logger.info(`[Limpeza] ${resultadoLimpeza} transações incompletas removidas.`);
+                    logger.info(`[Lmpza] ${resultadoLimpeza} transações incompletas removidas.`);
                 }
                 
                 const resNotif = await gerenciadorNotificacoes.processar(clienteWhatsApp);
@@ -33,30 +26,53 @@ class ServicoLimpeza {
 
                 const total = (resNotif.sucesso ? resNotif.dados : 0) + (resTrans.sucesso ? resTrans.dados : 0);
                 if (total > 0) {
-                    this.logger.info(`[Limpeza] Processamento rápido concluído: ${total} itens tratados.`);
+                    logger.info(`[Lmpza] Processamento rápido concluído: ${total} itens tratados.`);
                 }
             } catch (erro) {
-                this.logger.error(`[Limpeza] Erro no processamento rápido: ${erro.message}`);
+                logger.error(`[Lmpza] Erro no processamento rápido: ${erro.message}`);
             }
         }
-    }
+    };
 
-    async executarLimpezaProfunda() {
-        const { clienteWhatsApp, gerenciadorTransacoes, gerenciadorNotificacoes, filasMidia } = this.componentes;
+    const executarLimpezaProfunda = async () => {
+        const { clienteWhatsApp, gerenciadorTransacoes, gerenciadorNotificacoes, filasMidia } = componentes;
 
         if (clienteWhatsApp.pronto && filasMidia) {
             try {
-                this.logger.info('[Limpeza] Iniciando limpeza profunda diária...');
+                logger.info('[Lmpza] Iniciando limpeza profunda diária...');
                 await gerenciadorNotificacoes.limparAntigas(1);
                 await gerenciadorTransacoes.limparTransacoesAntigas(1);
                 await gerenciadorTransacoes.limparTransacoesIncompletas();
                 await filasMidia.limparTrabalhosPendentes();
-                this.logger.info('[Limpeza] Limpeza profunda concluída.');
+                logger.info('[Lmpza] Limpeza profunda concluída.');
             } catch (erro) {
-                this.logger.error(`[Limpeza] Erro na limpeza profunda: ${erro.message}`);
+                logger.error(`[Lmpza] Erro na limpeza profunda: ${erro.message}`);
             }
         }
-    }
-}
+    };
 
-module.exports = ServicoLimpeza;
+    const iniciar = () => {
+        logger.info('[Lmpza] Serviço de manutenção iniciado.');
+        
+        // Limpeza inicial imediata (Pasta Temp)
+        LimpadorTemp.limpar(diretorioTemp, 30, logger);
+
+        // Loop de processamento rápido (5s)
+        setInterval(() => executarProcessamentoRapido(), 5000);
+
+        // Loop de limpeza de arquivos temporários (1h)
+        setInterval(() => executarLimpezaTemp(), 60 * 60 * 1000);
+
+        // Loop de limpeza profunda (24h)
+        setInterval(() => executarLimpezaProfunda(), 24 * 60 * 60 * 1000);
+    };
+
+    return {
+        iniciar,
+        executarLimpezaTemp,
+        executarProcessamentoRapido,
+        executarLimpezaProfunda
+    };
+};
+
+module.exports = criarServicoLimpeza;

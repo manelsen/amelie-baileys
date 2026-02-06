@@ -88,15 +88,15 @@ const gerenciarCicloVidaTransacao = async (dependencias, mensagemMapeada, chatId
         return Resultado.falha(new Error("ID da Transação faltando após criação"));
     }
     transacaoId = transacao.id; // ID validado
-    registrador.info(`[TxLifecycle] Transação ${transacaoId} criada.`);
+    registrador.debug(`[Trnsç] Transação ${transacaoId} criada.`);
 
     // 2. Marcar como Processando
     await gerenciadorTransacoes.marcarComoProcessando(transacaoId);
 
     // 3. Executar Lógica Core
-    registrador.info(`[TxLifecycle] Executando funcaoCore para transação ${transacaoId}`);
+    registrador.debug(`[Trnsç] Executando transação ${transacaoId}`);
     const resultadoCore = await funcaoCore(transacao); // Executa a função específica passada
-    registrador.info(`[TxLifecycle] funcaoCore para transação ${transacaoId} concluída. Sucesso: ${resultadoCore.sucesso}`);
+    registrador.info(`[Trnsç] Transação ${transacaoId} concluída. Sucesso: ${resultadoCore.sucesso}`);
 
     // 4. Retornar resultado da lógica core (sucesso ou falha controlada por ela)
     return resultadoCore;

@@ -24,6 +24,7 @@ const GerenciadorTransacoes = require('./adaptadores/transacoes/GerenciadorTrans
 const criarServicoMensagem = require('./servicos/ServicoMensagem');
 const ServicoLimpeza = require('./servicos/ServicoLimpeza');
 const Telemetria = require('./monitoramento/Telemetria');
+const LimpadorTemp = require('./utilitarios/LimpadorTemp');
 
 // 1.5 Silenciar logs "hardcoded" de bibliotecas externas (ex: libsignal-node)
 const originalConsoleInfo = console.info;
@@ -42,14 +43,14 @@ console.info = function() {
 // 3. Inicialização de Componentes
 logger.info('🚀 Iniciando Amélie (Baileys Edition)');
 
-const telemetria = new Telemetria(logger);
+const telemetria = Telemetria(logger);
 telemetria.iniciar();
 
-const configManager = new ConfigManager(logger, path.join(process.cwd(), 'db'));
-const clienteWhatsApp = new ClienteBaileys(logger, { clienteId: 'principal' });
-const gerenciadorNotificacoes = new GerenciadorNotificacoes(logger, './temp');
+const configManager = ConfigManager(logger, path.join(process.cwd(), 'db'));
+const clienteWhatsApp = ClienteBaileys(logger, { clienteId: 'principal' });
+const gerenciadorNotificacoes = GerenciadorNotificacoes(logger, './temp');
 const gerenciadorAI = criarAdaptadorAI({ registrador: logger, apiKey: process.env.API_KEY });
-const gerenciadorTransacoes = new GerenciadorTransacoes(logger, path.join(process.cwd(), 'db'));
+const gerenciadorTransacoes = GerenciadorTransacoes(logger, path.join(process.cwd(), 'db'));
 const servicoMensagem = criarServicoMensagem(logger, clienteWhatsApp, gerenciadorTransacoes);
 
 // 4. Configurar Eventos do Cliente
@@ -58,7 +59,7 @@ clienteWhatsApp.on('pronto', async () => {
 
     const filasMidia = inicializarFilasMidia(logger, gerenciadorAI, configManager, servicoMensagem);
     
-    const gerenciadorMensagens = new GerenciadorMensagens(
+    const gerenciadorMensagens = GerenciadorMensagens(
         logger, clienteWhatsApp, configManager, gerenciadorAI, 
         filasMidia, gerenciadorTransacoes, servicoMensagem
     );
@@ -66,12 +67,15 @@ clienteWhatsApp.on('pronto', async () => {
     gerenciadorMensagens.registrarComoHandler(clienteWhatsApp);
 
     // Inicializar Serviço de Limpeza e Manutenção
-    const servicoLimpeza = new ServicoLimpeza(logger, {
+    const servicoLimpeza = ServicoLimpeza(logger, {
         clienteWhatsApp, gerenciadorTransacoes, gerenciadorNotificacoes, filasMidia, gerenciadorMensagens
     });
     servicoLimpeza.iniciar();
 
     // Limpeza inicial
+    await LimpadorTemp.limpar('./temp', 30, logger);
+    LimpadorTemp.agendarLimpeza('./temp', 60 * 60 * 1000, logger); // 1 vez por hora
+
     await gerenciadorTransacoes.limparTransacoesIncompletas();
     await gerenciadorNotificacoes.processar(clienteWhatsApp);
     await gerenciadorTransacoes.processarTransacoesPendentes(clienteWhatsApp);

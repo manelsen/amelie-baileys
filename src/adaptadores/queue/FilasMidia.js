@@ -11,7 +11,7 @@ const OrquestradorMidia = require('./OrquestradorMidia');
 const inicializarFilasMidia = (registrador, gerenciadorAI, gerenciadorConfig, servicoMensagem) => {
     registrador.info('✨ Inicializando Orquestrador de Mídia Assíncrono (Lite)...');
 
-    const orquestrador = new OrquestradorMidia(registrador, {
+    const orquestrador = OrquestradorMidia(registrador, {
         gerenciadorAI,
         configManager: gerenciadorConfig,
         servicoMensagem
