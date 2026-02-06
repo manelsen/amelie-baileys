@@ -51,7 +51,7 @@ const clienteWhatsApp = ClienteBaileys(logger, { clienteId: 'principal' });
 const gerenciadorNotificacoes = GerenciadorNotificacoes(logger, './temp');
 const gerenciadorAI = criarAdaptadorAI({ registrador: logger, apiKey: process.env.API_KEY });
 const gerenciadorTransacoes = GerenciadorTransacoes(logger, path.join(process.cwd(), 'db'));
-const servicoMensagem = criarServicoMensagem(logger, clienteWhatsApp, gerenciadorTransacoes);
+const servicoMensagem = criarServicoMensagem(logger, clienteWhatsApp, gerenciadorTransacoes, gerenciadorNotificacoes);
 
 // 4. Configurar Eventos do Cliente
 clienteWhatsApp.on('pronto', async () => {

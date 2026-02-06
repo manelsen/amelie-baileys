@@ -1,390 +1,33 @@
 /**
- * ServicoMensagem - Centraliza o envio de mensagens no sistema
+ * ServicoMensagem - Orquestrador central de mensagens
  * 
- * Implementa o padrão Railway com abordagem funcional para tratamento de erros.
+ * Refatorado para delegar responsabilidades para submódulos:
+ * - ServicoSnapshot: Reconstrução de contexto
+ * - EstrategiasEnvio: Lógica de despacho (Baileys)
  * 
  * @author Manel
- * @version 2.0.0
+ * @version 3.0.1 (Refatorado + Correção Dependência Notificações)
  */
 
-const fs = require('fs');
-const path = require('path');
-
-// Versão simples do padrão Railway para fluxo de erros
-const Resultado = {
-  sucesso: (dados) => ({ sucesso: true, dados, erro: null }),
-  falha: (erro) => ({ sucesso: false, dados: null, erro }),
-  
-  // Funções utilitárias para encadeamento
-  mapear: (resultado, fn) => resultado.sucesso ? Resultado.sucesso(fn(resultado.dados)) : resultado,
-  encadear: (resultado, fn) => resultado.sucesso ? fn(resultado.dados) : resultado,
-  
-  // Manipuladores de resultado
-  dobrar: (resultado, aoSucesso, aoFalhar) => 
-    resultado.sucesso ? aoSucesso(resultado.dados) : aoFalhar(resultado.erro)
-};
+const { Resultado } = require('../utilitarios/Ferrovia');
+const ServicoSnapshot = require('./mensagens/ServicoSnapshot');
+const EstrategiasEnvio = require('./mensagens/EstrategiasEnvio');
 
 /**
- * Funções puras - Processamento de texto
- */
-
-// Função limparTextoResposta removida por redundância.
-// A limpeza principal ocorre em GerenciadorAI.js.
-/**
- * Obtém texto de resposta seguro
- * @param {string} texto - Texto original
- * @returns {Resultado} Resultado com texto processado
+ * Valida e sanitiza o texto de resposta
  */
 const obterRespostaSegura = (texto) => {
-  // Verificar nulidade e tipo no texto recebido (já processado por GerenciadorAI)
   if (!texto || typeof texto !== 'string') {
-    return Resultado.falha(new Error("Texto de resposta nulo ou não é string"));
+    return Resultado.falha(new Error("Texto de resposta nulo ou inválido"));
   }
-  // Verificar se o texto está vazio após a limpeza prévia em GerenciadorAI
-  // Usar trim() aqui apenas para a verificação de vazio.
   if (texto.trim() === '') {
-    return Resultado.falha(new Error("Texto de resposta vazio após limpeza prévia"));
+    return Resultado.falha(new Error("Texto de resposta vazio"));
   }
-  // Retorna o texto como está, confiando na limpeza anterior.
   return Resultado.sucesso(texto);
 };
 
 /**
- * Funções puras - Geração de snapshots
- */
-
-/**
- * Captura snapshot de uma mensagem original
- * @param {Object} mensagemOriginal - Mensagem original
- * @param {Object} cliente - Cliente WhatsApp
- * @param {Object} registrador - Registrador para logs
- * @returns {Promise<Resultado>} Resultado com snapshot da mensagem
- */
-const capturarSnapshotMensagem = async (mensagemOriginal, cliente, registrador) => {
-  try {
-    if (!mensagemOriginal) {
-      return Resultado.falha(new Error("Mensagem original não fornecida"));
-    }
-    
-    // Extrair dados essenciais da mensagem
-    const snapshot = {
-      id: mensagemOriginal.id && mensagemOriginal.id._serialized ? mensagemOriginal.id._serialized : null,
-      body: mensagemOriginal.body || '',
-      tipo: mensagemOriginal.type || 'texto',
-      data: new Date().toISOString(),
-      
-      // Metadados do remetente
-      remetente: {
-        id: mensagemOriginal.author || mensagemOriginal.from,
-        nome: null // será preenchido abaixo
-      },
-      
-      // Metadados do chat
-      chat: {
-        id: null,
-        tipo: null,
-        nome: null
-      },
-      
-      // Dados técnicos para referência
-      referenciaTecnica: {
-        stanzaId: mensagemOriginal._data ? mensagemOriginal._data.id : null,
-        participant: mensagemOriginal._data ? mensagemOriginal._data.participant : null
-      },
-      
-      // Flag para indicar se há mídia
-      temMidia: mensagemOriginal.hasMedia || false,
-      tipoMidia: mensagemOriginal.hasMedia ? (mensagemOriginal.type || 'desconhecido') : null,
-      
-      // Timestamp de criação do snapshot
-      timestampSnapshot: Date.now()
-    };
-    
-    // Tentar obter nome do remetente
-    try {
-      if (cliente) {
-        const contato = await cliente.getContactById(snapshot.remetente.id);
-        snapshot.remetente.nome = contato.pushname || contato.name || contato.shortName || 'Usuário';
-      } else {
-        snapshot.remetente.nome = 'Usuário';
-      }
-    } catch (erroContato) {
-      
-      snapshot.remetente.nome = 'Usuário';
-    }
-    
-    // Obter dados do chat
-    try {
-      if (typeof mensagemOriginal.getChat === 'function') {
-        const chat = await mensagemOriginal.getChat();
-        snapshot.chat.id = chat.id._serialized;
-        snapshot.chat.tipo = chat.isGroup ? 'grupo' : 'individual';
-        snapshot.chat.nome = chat.name || (chat.isGroup ? 'Grupo' : 'Chat');
-      } else {
-        snapshot.chat.id = mensagemOriginal.from;
-        snapshot.chat.tipo = mensagemOriginal.from.includes('@g.us') ? 'grupo' : 'individual';
-        snapshot.chat.nome = 'Chat';
-      }
-    } catch (erroChat) {
-      
-      snapshot.chat.id = mensagemOriginal.from;
-      snapshot.chat.tipo = mensagemOriginal.from.includes('@g.us') ? 'grupo' : 'individual';
-      snapshot.chat.nome = 'Chat';
-    }
-    
-    // Se for mídia, capturar descrição
-    if (snapshot.temMidia) {
-      try {
-        if (mensagemOriginal.type === 'image') {
-          snapshot.descricaoMidia = '📷 [Image]';
-        } else if (mensagemOriginal.type === 'video') {
-          snapshot.descricaoMidia = '🎥 [Vídeo]';
-        } else if (mensagemOriginal.type === 'audio' || mensagemOriginal.type === 'ptt') {
-          snapshot.descricaoMidia = '🔊 [Áudio]';
-        } else if (mensagemOriginal.type === 'document') {
-          snapshot.descricaoMidia = '📄 [Documento]';
-        } else {
-          snapshot.descricaoMidia = '[Mídia]';
-        }
-      } catch (erroMidia) {
-        snapshot.descricaoMidia = '[Mídia]';
-      }
-    }
-    
-    return Resultado.sucesso(snapshot);
-  } catch (erro) {
-    registrador.error(`Erro ao capturar snapshot de mensagem: ${erro.message}`);
-    return Resultado.falha(erro);
-  }
-};
-
-/**
- * Gera texto de contexto a partir de um snapshot
- * @param {Object} snapshot - Snapshot da mensagem original
- * @returns {Resultado} Resultado com texto de contexto
- */
-const gerarTextoContexto = (snapshot) => {
-  if (!snapshot) {
-    return Resultado.falha(new Error("Snapshot não fornecido"));
-  }
-  
-  try {
-    let textoContexto;
-    
-    // Para mensagens de texto simples
-    if (!snapshot.temMidia) {
-      textoContexto = `📩 Em resposta a ${snapshot.remetente.nome}: "${snapshot.body.substring(0, 50)}${snapshot.body.length > 50 ? '...' : ''}"`;
-    }
-    // Para mensagens com mídia
-    else if (snapshot.temMidia) {
-      const textoAdicional = snapshot.body ? ` com mensagem: "${snapshot.body.substring(0, 30)}${snapshot.body.length > 30 ? '...' : ''}"` : '';
-      textoContexto = `📩 Em resposta a ${snapshot.descricaoMidia} de ${snapshot.remetente.nome}${textoAdicional}`;
-    }
-    else {
-      textoContexto = `📩 Em resposta a uma mensagem anterior`;
-    }
-    
-    return Resultado.sucesso(textoContexto);
-  } catch (erro) {
-    return Resultado.falha(erro);
-  }
-};
-
-/**
- * Verifica se a mensagem original ainda está utilizável
- * @param {Object} mensagem - Objeto de mensagem
- * @param {Object} registrador - Objeto para logging
- * @returns {Promise<Resultado>} Resultado indicando se a mensagem está utilizável
- */
-const verificarMensagemUtilizavel = async (mensagem, registrador) => {
-  try {
-    if (!mensagem) {
-      return Resultado.falha(new Error("Mensagem não fornecida"));
-    }
-    
-    // Verificar propriedades básicas
-    if (!mensagem.id || !mensagem.from) {
-      return Resultado.falha(new Error("Mensagem sem propriedades essenciais"));
-    }
-    
-    // Verificar se o método reply está acessível
-    if (typeof mensagem.reply !== 'function') {
-      return Resultado.falha(new Error("Método reply não disponível na mensagem"));
-    }
-    
-    // Tentar acessar o chat associado (operação que falha se a mensagem expirou)
-    if (typeof mensagem.getChat === 'function') {
-      try {
-        await mensagem.getChat();
-      } catch (erroChatAcesso) {
-        return Resultado.falha(new Error(`Não foi possível acessar o chat: ${erroChatAcesso.message}`));
-      }
-    }
-    
-    return Resultado.sucesso(true);
-  } catch (erro) {
-    
-    return Resultado.falha(erro);
-  }
-};
-
-/**
- * Funções puras - Estratégias de envio
- */
-
-/**
- * Estratégia 1: Tentativa de envio direto com reply
- * @param {Object} mensagemOriginal - Mensagem original para responder
- * @param {string} textoSeguro - Texto já processado para resposta
- * @param {Object} registrador - Objeto para logging
- * @returns {Promise<Resultado>} Resultado da operação
- */
-const envioComReplyDireto = async (mensagemOriginal, textoSeguro, registrador) => {
-  try {
-    await mensagemOriginal.reply(textoSeguro);
-    return Resultado.sucesso({ metodoUsado: 'reply_direto' });
-  } catch (erroReply) {
-    registrador.warn(`❗ Falha no método reply direto: ${erroReply.message}`);
-    return Resultado.falha(erroReply);
-  }
-};
-
-/**
- * Estratégia 2: Tentativa de envio com citação via ID
- * @param {Object} clienteWhatsApp - Cliente WhatsApp
- * @param {string} destinatario - ID do destinatário
- * @param {string} textoSeguro - Texto já processado para resposta
- * @param {string} mensagemOriginalId - ID da mensagem original
- * @param {Object} registrador - Objeto para logging
- * @returns {Promise<Resultado>} Resultado da operação
- */
-const envioComCitacaoId = async (clienteWhatsApp, destinatario, textoSeguro, mensagemOriginalId, registrador) => {
-  try {
-    await clienteWhatsApp.cliente.sendMessage(
-      destinatario, 
-      textoSeguro, 
-      { quotedMessageId: mensagemOriginalId }
-    );
-    return Resultado.sucesso({ metodoUsado: 'citacao_id' });
-  } catch (erroCitacao) {
-    registrador.warn(`Falha na citação via ID: ${erroCitacao.message}`);
-    return Resultado.falha(erroCitacao);
-  }
-};
-
-/**
- * Estratégia 3: Envio com contexto reconstruído via snapshot
- * @param {Object} clienteWhatsApp - Cliente WhatsApp
- * @param {string} destinatario - ID do destinatário
- * @param {string} textoSeguro - Texto já processado para resposta
- * @param {Object} snapshot - Snapshot da mensagem original
- * @param {Object} registrador - Objeto para logging
- * @returns {Promise<Resultado>} Resultado da operação
- */
-const envioComContextoSnapshot = async (clienteWhatsApp, destinatario, textoSeguro, snapshot, registrador) => {
-  try {
-    const resultadoContexto = gerarTextoContexto(snapshot);
-    
-    return Resultado.dobrar(
-      resultadoContexto,
-      async (textoContexto) => {
-        const conteudoComContexto = `${textoContexto}\n\n${textoSeguro}`;
-        
-        registrador.info(`Enviando com contexto reconstruído via snapshot para ${destinatario}`);
-        
-        await clienteWhatsApp.cliente.sendMessage(destinatario, conteudoComContexto);
-        return Resultado.sucesso({ metodoUsado: 'contexto_snapshot' });
-      },
-      (erro) => {
-        registrador.error(`Erro ao gerar contexto: ${erro.message}`);
-        return Resultado.falha(erro);
-      }
-    );
-  } catch (erroSnapshot) {
-    registrador.error(`Falha no envio com snapshot: ${erroSnapshot.message}`);
-    return Resultado.falha(erroSnapshot);
-  }
-};
-
-/**
- * Estratégia 4: Envio direto sem contexto (último recurso)
- * @param {Object} clienteWhatsApp - Cliente WhatsApp
- * @param {string} destinatario - ID do destinatário
- * @param {string} textoSeguro - Texto já processado para resposta
- * @param {Object} registrador - Objeto para logging
- * @returns {Promise<Resultado>} Resultado da operação
- */
-const envioDiretoSemContexto = async (clienteWhatsApp, destinatario, textoSeguro, registrador) => {
-  try {
-    registrador.warn(`⚠️ ALERTA DE ACESSIBILIDADE: Enviando sem preservação de contexto para ${destinatario}`);
-    
-    await clienteWhatsApp.cliente.sendMessage(destinatario, textoSeguro);
-    return Resultado.sucesso({ metodoUsado: 'direto_sem_contexto' });
-  } catch (erroDireto) {
-    registrador.error(`Falha no envio direto: ${erroDireto.message}`);
-    return Resultado.falha(erroDireto);
-  }
-};
-
-/**
- * Funções para integração com transações e recuperação
- */
-
-/**
- * Salva a mensagem como notificação pendente para recuperação posterior
- * @param {Object} clienteWhatsApp - Cliente WhatsApp
- * @param {string} destinatario - ID do destinatário
- * @param {string} texto - Texto da mensagem
- * @param {Object} snapshot - Snapshot da mensagem original (opcional)
- * @param {string} transacaoId - ID da transação (opcional)
- * @param {Object} registrador - Objeto para logging
- * @returns {Promise<Resultado>} Resultado da operação
- */
-const salvarComoNotificacaoPendente = async (clienteWhatsApp, destinatario, texto, snapshot, transacaoId, registrador) => {
-  try {
-    if (!destinatario) {
-      return Resultado.falha(new Error("Destinatário não fornecido"));
-    }
-    
-    // Se temos snapshot, salvar com contexto reconstruído
-    const resultadoFinal = await Resultado.encadear(
-      snapshot ? gerarTextoContexto(snapshot) : Resultado.sucesso(null),
-      async (textoContexto) => {
-        try {
-          const conteudoFinal = textoContexto 
-            ? `${textoContexto}\n\n${texto}`
-            : texto;
-          
-          // Apenas salvar usando a interface do cliente WhatsApp
-          const caminhoNotificacao = await clienteWhatsApp.salvarNotificacaoPendente(
-            destinatario, 
-            conteudoFinal,
-            { transacaoId, temContexto: !!textoContexto }
-          );
-          
-          registrador.info(`Mensagem salva como notificação pendente para ${destinatario}: ${caminhoNotificacao}`);
-          return Resultado.sucesso({ salvo: true, caminho: caminhoNotificacao });
-        } catch (erroSalvar) {
-          return Resultado.falha(erroSalvar);
-        }
-      }
-    );
-    
-    return resultadoFinal;
-  } catch (erro) {
-    registrador.error(`Erro ao salvar notificação pendente: ${erro.message}`);
-    return Resultado.falha(erro);
-  }
-};
-
-/**
- * Atualiza o status da transação
- * @param {Object} gerenciadorTransacoes - Gerenciador de transações (opcional)
- * @param {string} transacaoId - ID da transação
- * @param {boolean} sucesso - Indica se a operação foi bem-sucedida
- * @param {Error} erro - Objeto de erro (opcional)
- * @param {Object} registrador - Objeto para logging
- * @returns {Promise<Resultado>} Resultado da operação
+ * Atualiza o status da transação (Log de auditoria)
  */
 const atualizarStatusTransacao = async (gerenciadorTransacoes, transacaoId, sucesso, erro, registrador) => {
   if (!gerenciadorTransacoes || !transacaoId) {
@@ -394,203 +37,173 @@ const atualizarStatusTransacao = async (gerenciadorTransacoes, transacaoId, suce
   try {
     if (sucesso) {
       await gerenciadorTransacoes.marcarComoEntregue(transacaoId);
-      
     } else if (erro) {
-      await gerenciadorTransacoes.registrarFalhaEntrega(
-        transacaoId,
-        `Erro ao enviar: ${erro.message}`
-      );
-      
+      await gerenciadorTransacoes.registrarFalhaEntrega(transacaoId, `Erro: ${erro.message}`);
     }
     return Resultado.sucesso({ transacaoAtualizada: true });
   } catch (erroTransacao) {
-    registrador.error(`Erro ao atualizar transação: ${erroTransacao.message}`);
+    registrador.error(`[MsgServ] Erro ao atualizar transação: ${erroTransacao.message}`);
     return Resultado.falha(erroTransacao);
   }
 };
 
 /**
- * Cria o serviço de mensagens centralizado
- * @param {Object} registrador - Registrador para logs
- * @param {Object} clienteWhatsApp - Cliente WhatsApp
- * @param {Object} gerenciadorTransacoes - Gerenciador de transações (opcional)
- * @returns {Object} Serviço de mensagens com métodos públicos
+ * Fábrica do Serviço de Mensagens
+ * @param {Object} registrador Logger
+ * @param {Object} clienteWhatsApp Adaptador Baileys
+ * @param {Object} gerenciadorTransacoes (Opcional) Gerenciador de auditoria
+ * @param {Object} gerenciadorNotificacoes (Opcional) Gerenciador de fila offline
  */
-const criarServicoMensagem = (registrador, clienteWhatsApp, gerenciadorTransacoes = null) => {
-  
+const criarServicoMensagem = (registrador, clienteWhatsApp, gerenciadorTransacoes = null, gerenciadorNotificacoes = null) => {
+
   /**
-   * Função central para envio de mensagens com estratégias em fallback
-   * Implementa o padrão Railway para tratamento de erros
-   * @param {Object} mensagemOriginal - Mensagem original
-   * @param {string} texto - Texto da resposta
-   * @param {string} transacaoId - ID da transação (opcional)
-   * @returns {Promise<Resultado>} Resultado do envio
+   * Salva mensagem para envio posterior (Notificação Pendente)
    */
-  const enviarResposta = async (mensagemMapeada, texto, transacaoId = null) => {
-    // Obter texto seguro
-    const resultadoTexto = obterRespostaSegura(texto);
-    
-    if (!resultadoTexto.sucesso) {
-      registrador.error(`Texto inválido: ${resultadoTexto.erro.message}`);
-      return resultadoTexto;
-    }
-    
-    const textoSeguro = resultadoTexto.dados;
-    const destinatario = mensagemMapeada.from || mensagemMapeada.chatId; // Fallback para compatibilidade
-
+  const salvarComoNotificacaoPendente = async (destinatario, texto, snapshot, transacaoId) => {
     try {
-      // No Baileys, para o 'quoted' funcionar, precisamos passar o objeto RAW (_data)
-      // Se mensagemMapeada tiver _data, usamos ele. Se não, tentamos usar o próprio objeto (fallback).
-      const objetoQuoted = mensagemMapeada._data || mensagemMapeada;
-
-      // No Baileys, o envio é via adaptador que encapsula o socket
-      const resultado = await clienteWhatsApp.enviarTexto(destinatario, textoSeguro, {
-        quoted: objetoQuoted
-      });
-
-      if (resultado.sucesso) {
-        await atualizarStatusTransacao(gerenciadorTransacoes, transacaoId, true, null, registrador);
-        return Resultado.sucesso({ metodoUsado: 'baileys_reply' });
+      if (!gerenciadorNotificacoes) {
+        registrador.warn("[MsgServ] Gerenciador de Notificações não disponível. Mensagem perdida.");
+        return Resultado.falha(new Error("Gerenciador de Notificações indisponível"));
       }
-      throw resultado.erro || new Error("Falha no envio via adaptador");
 
+      // Se tiver snapshot, tenta gerar contexto textual antes de salvar
+      let textoFinal = texto;
+      if (snapshot) {
+        const resContexto = ServicoSnapshot.gerarTextoContexto(snapshot);
+        if (resContexto.sucesso) {
+          textoFinal = `${resContexto.dados}\n\n${texto}`;
+        }
+      }
+
+      // Usa a interface correta do GerenciadorNotificacoes
+      const resultadoSalvar = await gerenciadorNotificacoes.salvar(destinatario, textoFinal);
+      
+      if (resultadoSalvar.sucesso) {
+        registrador.info(`[MsgServ] Salvo como pendente para ${destinatario}`);
+        return Resultado.sucesso({ salvo: true, caminho: resultadoSalvar.dados });
+      } else {
+        return resultadoSalvar;
+      }
     } catch (erro) {
-      registrador.error(`Erro ao enviar resposta para ${destinatario}: ${erro.message}`);
-      
-      // Fallback: Salvar como notificação pendente
-      await salvarComoNotificacaoPendente(clienteWhatsApp, destinatario, textoSeguro, null, transacaoId, registrador);
-      await atualizarStatusTransacao(gerenciadorTransacoes, transacaoId, false, erro, registrador);
-      
+      registrador.error(`[MsgServ] Erro ao salvar pendente: ${erro.message}`);
       return Resultado.falha(erro);
     }
   };
-  
+
   /**
-   * Envia mensagem direta sem contexto (para mensagens do sistema)
-   * @param {string} destinatario - ID do destinatário
-   * @param {string} texto - Texto da mensagem
-   * @param {Object} opcoes - Opções adicionais (opcional)
-   * @returns {Promise<Resultado>} Resultado do envio
+   * Envia uma resposta para uma mensagem recebida
+   */
+  const enviarResposta = async (mensagemMapeada, texto, transacaoId = null) => {
+    const resTexto = obterRespostaSegura(texto);
+    if (!resTexto.sucesso) return resTexto;
+
+    const textoSeguro = resTexto.dados;
+    const destinatario = mensagemMapeada.from || mensagemMapeada.chatId;
+
+    // 1. Tenta envio nativo (com citação)
+    const tentativaEnvio = await EstrategiasEnvio.envioBaileysNativo(
+      clienteWhatsApp, 
+      destinatario, 
+      textoSeguro, 
+      mensagemMapeada
+    );
+
+    if (tentativaEnvio.sucesso) {
+      await atualizarStatusTransacao(gerenciadorTransacoes, transacaoId, true, null, registrador);
+      return tentativaEnvio;
+    }
+
+    registrador.warn(`[MsgServ] Falha no envio nativo para ${destinatario}. Tentando fallback. Erro: ${tentativaEnvio.erro?.message}`);
+
+    // 2. Fallback: Salvar como pendente
+    // Primeiro capturamos o snapshot para não perder o contexto
+    const resSnapshot = await ServicoSnapshot.capturarSnapshotMensagem(mensagemMapeada, clienteWhatsApp, registrador);
+    const snapshot = resSnapshot.sucesso ? resSnapshot.dados : null;
+
+    const resSalvar = await salvarComoNotificacaoPendente(destinatario, textoSeguro, snapshot, transacaoId);
+    
+    // Registra falha na transação original, mas sucesso no salvamento pendente
+    await atualizarStatusTransacao(gerenciadorTransacoes, transacaoId, false, tentativaEnvio.erro, registrador);
+    
+    return resSalvar.sucesso 
+      ? Resultado.sucesso({ metodoUsado: 'salvo_pendente' }) 
+      : Resultado.falha(tentativaEnvio.erro);
+  };
+
+  /**
+   * Envia mensagem direta (Ex: Avisos do sistema, Broadcasts)
    */
   const enviarMensagemDireta = async (destinatario, texto, opcoes = {}) => {
-    // Obter texto seguro
-    const resultadoTexto = obterRespostaSegura(texto);
-    
-    if (!resultadoTexto.sucesso) {
-      registrador.error(`Texto inválido: ${resultadoTexto.erro.message}`);
-      return resultadoTexto;
-    }
-    
-    const textoSeguro = resultadoTexto.dados;
-    
-    // Proteção contra envio para Status
+    const resTexto = obterRespostaSegura(texto);
+    if (!resTexto.sucesso) return resTexto;
+
     if (destinatario === 'status@broadcast') {
-      registrador.warn(`[MsgServ] Tentativa de envio para status@broadcast bloqueada.`);
-      return Resultado.falha(new Error("Envio para Status não permitido"));
+      return Resultado.falha(new Error("Envio para Status bloqueado por segurança"));
     }
-    
-    try {
-      await clienteWhatsApp.cliente.sendMessage(destinatario, textoSeguro);
-      
-      // Atualizar transação se fornecida
+
+    const tentativa = await EstrategiasEnvio.envioDireto(clienteWhatsApp, destinatario, resTexto.dados);
+
+    if (tentativa.sucesso) {
       if (opcoes.transacaoId) {
         await atualizarStatusTransacao(gerenciadorTransacoes, opcoes.transacaoId, true, null, registrador);
       }
-      
-      return Resultado.sucesso({ metodoUsado: 'envio_direto' });
-    } catch (erro) {
-      registrador.error(`Erro no envio direto para ${destinatario}: ${erro.message}`);
-      
-      // Atualizar transação se fornecida
-      if (opcoes.transacaoId) {
-        await atualizarStatusTransacao(gerenciadorTransacoes, opcoes.transacaoId, false, erro, registrador);
-      }
-      
-      // Salvar como notificação pendente
-      await salvarComoNotificacaoPendente(clienteWhatsApp, destinatario, textoSeguro, null, opcoes.transacaoId, registrador);
-      
-      return Resultado.falha(erro);
+      return tentativa;
     }
-  };
-  
-  /**
-   * Recupera e processa notificações pendentes
-   * @returns {Promise<Resultado>} Resultado da recuperação
-   */
-  const processarNotificacoesPendentes = async () => {
-    try {
-      const notificacoesProcessadas = await clienteWhatsApp.processarNotificacoesPendentes();
-      return Resultado.sucesso({ notificacoesProcessadas });
-    } catch (erro) {
-      registrador.error(`Erro ao processar notificações pendentes: ${erro.message}`);
-      return Resultado.falha(erro);
+
+    // Fallback para pendente
+    registrador.warn(`[MsgServ] Falha no envio direto. Salvando pendente.`);
+    await salvarComoNotificacaoPendente(destinatario, resTexto.dados, null, opcoes.transacaoId);
+    
+    if (opcoes.transacaoId) {
+      await atualizarStatusTransacao(gerenciadorTransacoes, opcoes.transacaoId, false, tentativa.erro, registrador);
     }
+
+    return Resultado.falha(tentativa.erro);
   };
-  
+
   /**
-   * Envia uma mensagem baseada em dados de transação (padrão Orquestrador)
+   * Envia mensagem baseada em transação processada (Orquestrador)
    */
   const enviarMensagemComTransacao = async (dados) => {
-    const { resposta, chatId, messageKey, transacaoId, tipo } = dados;
+    const { resposta, chatId, messageKey, transacaoId } = dados;
     
-    // Obter texto seguro
-    const resultadoTexto = obterRespostaSegura(resposta);
-    if (!resultadoTexto.sucesso) {
-        registrador.error(`[MsgServ] Texto inválido para transação ${transacaoId}: ${resultadoTexto.erro.message}`);
-        return resultadoTexto;
-    }
+    // Simula uma estrutura mínima de mensagem para o envioBaileysNativo conseguir citar
+    const mockMensagem = messageKey ? { 
+      key: messageKey, 
+      _data: { 
+        key: messageKey,
+        // Adiciona estrutura mínima de mensagem para evitar crash no Baileys ao tentar ler o conteúdo citado
+        message: { conversation: 'Mídia processada' }
+      } 
+    } : null;
 
-    try {
-        // Enviar via adaptador Baileys
-        const resultado = await clienteWhatsApp.enviarTexto(chatId, resultadoTexto.dados, {
-            quoted: messageKey ? { key: messageKey, message: { conversation: 'Mídia processada' } } : undefined
-        });
-
-        if (resultado.sucesso) {
-            await atualizarStatusTransacao(gerenciadorTransacoes, transacaoId, true, null, registrador);
-            return Resultado.sucesso({ metodoUsado: 'transacao_envio' });
-        }
-        throw resultado.erro || new Error("Falha no envio via adaptador");
-    } catch (erro) {
-        registrador.error(`[MsgServ] Erro ao enviar resposta de transação ${transacaoId}: ${erro.message}`);
-        await atualizarStatusTransacao(gerenciadorTransacoes, transacaoId, false, erro, registrador);
-        return Resultado.falha(erro);
+    if (mockMensagem) {
+      return enviarResposta({ from: chatId, ...mockMensagem }, resposta, transacaoId);
+    } else {
+      return enviarMensagemDireta(chatId, resposta, { transacaoId });
     }
   };
 
-  // Retornar objeto imutável com métodos públicos
+  /**
+   * Processa notificações pendentes
+   */
+  const processarNotificacoesPendentes = async () => {
+    if (gerenciadorNotificacoes) {
+      return gerenciadorNotificacoes.processar(clienteWhatsApp);
+    }
+    return Resultado.sucesso({ processadas: 0, msg: 'Gerenciador não disponível' });
+  };
+
+  // Interface Pública
   return Object.freeze({
     enviarResposta,
     enviarMensagemDireta,
     enviarMensagemComTransacao,
     processarNotificacoesPendentes,
     
-    // Métodos auxiliares úteis para uso externo
-    capturarSnapshotMensagem: async (msg) => {
-      const resultado = await capturarSnapshotMensagem(msg, clienteWhatsApp.cliente, registrador);
-      return Resultado.dobrar(
-        resultado,
-        (dados) => dados,
-        (erro) => {
-          registrador.error(`Erro ao capturar snapshot: ${erro.message}`);
-          return null;
-        }
-      );
-    },
-    
-    gerarTextoContexto: (snapshot) => {
-      const resultado = gerarTextoContexto(snapshot);
-      return Resultado.dobrar(
-        resultado,
-        (dados) => dados,
-        (erro) => {
-          registrador.error(`Erro ao gerar texto de contexto: ${erro.message}`);
-          return "";
-        }
-      );
-    },
-    
-    // Compartilhar Resultado para uso externo
+    // Utilitários expostos (Fachada para os submódulos)
+    capturarSnapshotMensagem: (msg) => ServicoSnapshot.capturarSnapshotMensagem(msg, clienteWhatsApp, registrador),
+    gerarTextoContexto: ServicoSnapshot.gerarTextoContexto,
     Resultado
   });
 };

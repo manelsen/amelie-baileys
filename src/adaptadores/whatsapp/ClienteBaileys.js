@@ -138,6 +138,13 @@ const criarClienteBaileys = (registrador, opcoes = {}) => {
         enviarTexto: enviarMensagem, // Alias
         deveResponderNoGrupo,
         estaProntoRealmente: async () => pronto,
+        
+        // Mock de histórico para compatibilidade com IAPort
+        // Futuramente pode ser implementado usando uma store local (SQLite/MongoDB)
+        obterHistoricoMensagens: async (chatId, limite = 10) => {
+            return [];
+        },
+
         reconectar: async () => {
             registrador.info('[Baileys] Reconexão automática ativa.');
             return true;

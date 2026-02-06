@@ -74,7 +74,7 @@ const gerenciarCicloVidaTransacao = async (dependencias, mensagemMapeada, chatId
       registrador.error(`[TxLifecycle] ${erroMsg}`);
       try {
         // Tenta notificar o usuário sobre a falha inicial
-        await servicoMensagem.enviarResposta(mensagem, 'Desculpe, ocorreu um erro interno ao iniciar o processamento.');
+        await servicoMensagem.enviarResposta(mensagemMapeada, 'Desculpe, ocorreu um erro interno ao iniciar o processamento.');
       } catch (e) { registrador.error(`[TxLifecycle] Falha ao enviar erro sobre criarTransacao: ${e.message}`); }
       return Resultado.falha(resultadoTransacao?.erro || new Error("Falha ao criar transação"));
     }
@@ -83,7 +83,7 @@ const gerenciarCicloVidaTransacao = async (dependencias, mensagemMapeada, chatId
     if (!transacao || !transacao.id) {
         registrador.error("[TxLifecycle] *** ERRO CRÍTICO: Objeto transação ou ID está faltando após criação! ***");
          try {
-             await servicoMensagem.enviarResposta(mensagem, 'Desculpe, ocorreu um erro crítico ao registrar o processamento (ID faltando).');
+             await servicoMensagem.enviarResposta(mensagemMapeada, 'Desculpe, ocorreu um erro crítico ao registrar o processamento (ID faltando).');
          } catch(e) { registrador.error(`[TxLifecycle] Falha ao enviar erro sobre ID faltando: ${e.message}`)}
         return Resultado.falha(new Error("ID da Transação faltando após criação"));
     }
@@ -117,11 +117,18 @@ const gerenciarCicloVidaTransacao = async (dependencias, mensagemMapeada, chatId
     // A lógica de não enviar para erros específicos (como 'desabilitada') deve estar na funcaoCore ou na inicialização.
     // Este catch lida com erros *inesperados*.
     const msgErroLower = erroMsg.toLowerCase();
-     if (!msgErroLower.includes('segurança')) { // Exemplo, pode precisar de mais condições
+     if (!msgErroLower.includes('segurança')) { 
         try {
+           let textoResposta = 'Desculpe, ocorreu um erro inesperado durante o processamento.';
+           
+           // Tratamento amigável para limite de API (429)
+           if (msgErroLower.includes('429') || msgErroLower.includes('resource exhausted')) {
+             textoResposta = '⚠️ O sistema de IA está sobrecarregado no momento. Por favor, aguarde alguns minutos e tente novamente.';
+           }
+
            await servicoMensagem.enviarResposta(
-              mensagem,
-              'Desculpe, ocorreu um erro inesperado durante o processamento.'
+              mensagemMapeada,
+              textoResposta
            );
         } catch (erroEnvio) {
            registrador.error(`[TxLifecycle] Falha ao enviar mensagem de erro geral para ${transacaoId || '(sem ID)'}: ${erroEnvio.message}`);
