@@ -7,7 +7,8 @@
 const fs = require('fs');
 const path = require('path');
 const _ = require('lodash/fp');
-const { Resultado, ArquivoUtils, Trilho, Operacoes } = require('../../utilitarios/Ferrovia');
+const { Resultado, Trilho, Operacoes } = require('../../utilitarios/Ferrovia');
+const ArquivoUtils = require('../../utilitarios/ArquivoUtils'); // Importação direta do novo arquivo
 const { criarDiretorio, salvarArquivoJson, listarArquivos, lerArquivoJson, removerArquivo } = ArquivoUtils;
 
 class GerenciadorNotificacoes {

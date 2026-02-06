@@ -1,11 +1,13 @@
 const EventEmitter = require('events');
 const path = require('path');
 const { Resultado } = require('../../bancodedados/Repositorio');
+const RegistradorDebugProxy = require('./RegistradorDebugProxy');
 
 class GerenciadorTransacoes extends EventEmitter {
   constructor(registrador, diretorioDB = path.join(process.cwd(), 'db')) {
     super();
-    this.registrador = registrador;
+    // Embrulha o logger no proxy para forçar logs de Ciclo de Vida para debug
+    this.registrador = new RegistradorDebugProxy(registrador);
     this.diretorioDB = diretorioDB;
 
     // Usando a nova arquitetura internamente

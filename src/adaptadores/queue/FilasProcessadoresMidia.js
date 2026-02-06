@@ -7,7 +7,8 @@
  */
 
 const _ = require('lodash/fp');
-const { Resultado, Trilho, ArquivoUtils } = require('../../utilitarios/Ferrovia');
+const { Resultado, Trilho } = require('../../utilitarios/Ferrovia');
+const ArquivoUtils = require('../../utilitarios/ArquivoUtils');
 const FilasUtilitarios = require('./FilasUtilitarios');
 
 /**
@@ -28,8 +29,6 @@ const FilasProcessadoresMidia = {
     if (!imageData || !imageData.data) {
       return Resultado.falha(new Error("Dados da imagem inválidos ou ausentes"));
     }
-
-    
 
     // Chamar a função refatorada que retorna Promise<Resultado>
     const resultadoAI = await gerenciadorAI.processarImagem(imageData, prompt, config);
@@ -93,7 +92,6 @@ const FilasProcessadoresMidia = {
 
     // Apenas retornamos o Resultado obtido do GerenciadorAI.
     // O log de erro já ocorreu dentro do GerenciadorAI se necessário.
-    // O catch no FilasProcessadores lidará com a falha do job.
     return resultadoAI;
   })
 };
