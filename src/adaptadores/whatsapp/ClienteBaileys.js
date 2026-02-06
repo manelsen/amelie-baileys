@@ -1,6 +1,6 @@
-const { 
-    default: makeWASocket, 
-    useMultiFileAuthState, 
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore
@@ -10,6 +10,10 @@ const P = require('pino');
 const qrcode = require('qrcode-terminal');
 const { baileysParaAmelie } = require('./MapperMensagem');
 
+// Logger completamente silencioso para o Baileys
+// Os eventos importantes são logados manualmente no código do ClienteBaileys
+const criarLoggerBaileys = () => P({ level: 'silent' });
+
 class ClienteBaileys extends EventEmitter {
     constructor(registrador, opcoes = {}) {
         super();
@@ -18,7 +22,8 @@ class ClienteBaileys extends EventEmitter {
         this.diretorioAuth = `./db/auth-${this.clienteId}`;
         this.sock = null;
         this.pronto = false;
-        
+        this.loggerBaileys = criarLoggerBaileys();
+
         this.inicializar();
     }
 
@@ -30,10 +35,10 @@ class ClienteBaileys extends EventEmitter {
             version,
             auth: {
                 creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, P({ level: 'silent' })),
+                keys: makeCacheableSignalKeyStore(state.keys, this.loggerBaileys),
             },
             printQRInTerminal: false,
-            logger: P({ level: 'silent' }),
+            logger: this.loggerBaileys,
             browser: ['Amélie', 'MacOS', '3.0.0']
         });
 
@@ -41,7 +46,7 @@ class ClienteBaileys extends EventEmitter {
 
         this.sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect, qr } = update;
-            
+
             if (qr) {
                 qrcode.generate(qr, { small: true });
                 this.registrador.info('[Baileys] QR Code gerado.');
@@ -80,10 +85,10 @@ class ClienteBaileys extends EventEmitter {
             // DEBUG: Logs detalhados para investigação de falha de envio
             // this.registrador.info(`[Baileys] INICIO ENVIO DE MENSAGEM`); // Log removido para redução de ruído
             // this.registrador.info(`[Baileys] Parametro 'para' recebido: "${para}"`); // Log removido
-            
+
             const jid = para.includes('@') ? para : `${para}@s.whatsapp.net`;
             // this.registrador.info(`[Baileys] JID normalizado para envio: "${jid}"`); // Log removido
-            
+
             let quotedFinal = opcoes?.quoted;
             if (quotedFinal) {
                 // this.registrador.info(`[Baileys] Opcoes.quoted presente.`); // Log removido
@@ -91,7 +96,7 @@ class ClienteBaileys extends EventEmitter {
                     // Cuidado com estruturas circulares, mas JSON.stringify geralmente ok para objetos de mensagem serializados
                     // const quotedDump = JSON.stringify(quotedFinal, null, 2); // Log removido
                     // this.registrador.info(`[Baileys] DUMP Quoted: ${quotedDump}`); // Log removido
-                    
+
                     // Correção proativa de chaves malformadas (compatibilidade legado/mapper antigo)
                     if (quotedFinal.key) {
                         // Garantir remoteJid (Baileys exige)
@@ -109,7 +114,7 @@ class ClienteBaileys extends EventEmitter {
                         if (!quotedFinal.key.id && quotedFinal.key._serialized) {
                              quotedFinal.key.id = quotedFinal.key._serialized;
                         }
-                        
+
                         // Limpeza de participant vazio (causa erro em PV)
                         if (quotedFinal.key.participant === '' || quotedFinal.key.participant === null) {
                             delete quotedFinal.key.participant;
@@ -129,9 +134,9 @@ class ClienteBaileys extends EventEmitter {
             }
 
             // this.registrador.info(`[Baileys] Executando sock.sendMessage(${jid})...`); // Log removido
-            
+
             const sentMsg = await this.sock.sendMessage(jid, { text: conteudo }, { quoted: quotedFinal });
-            
+
             // this.registrador.info(`[Baileys] Sucesso no sock.sendMessage. ID: ${sentMsg?.key?.id}`); // Log removido
             // Retornar objeto compatível com o padrão Railway do ServicoMensagem
             return { sucesso: !!sentMsg, dados: sentMsg, erro: null };
@@ -148,7 +153,7 @@ class ClienteBaileys extends EventEmitter {
             return { sucesso: false, dados: null, erro };
         }
     }
-    
+
     // Alias para compatibilidade
     async enviarTexto(para, conteudo, opcoes = null) {
         return this.enviarMensagem(para, conteudo, opcoes);
@@ -157,11 +162,11 @@ class ClienteBaileys extends EventEmitter {
     // Mock para histórico de mensagens (Baileys não suporta fetch histórico fácil sem Store)
     async obterHistoricoMensagens(chatId, limite = 10) {
         // TODO: Implementar store persistente se necessário
-        return []; 
+        return [];
     }
 
     // Métodos de compatibilidade para o MonitorSaude e legacy code
-    
+
     async reconectar() {
         this.registrador.info('[Baileys] Solicitação de reconexão recebida (gerenciada nativamente pelo Baileys).');
         // O Baileys reconecta sozinho. Se precisarmos forçar:
@@ -179,7 +184,7 @@ class ClienteBaileys extends EventEmitter {
         return new Proxy(this.sock, {
             get: (target, prop) => {
                 if (prop in target) return target[prop];
-                
+
                 // Mock getContactById
                 if (prop === 'getContactById') {
                     return async (id) => ({
@@ -189,7 +194,7 @@ class ClienteBaileys extends EventEmitter {
                         pushname: 'Usuário'
                     });
                 }
-                
+
                 return undefined;
             }
         });

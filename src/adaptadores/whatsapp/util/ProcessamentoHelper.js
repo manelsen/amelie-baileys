@@ -22,10 +22,10 @@ const inicializarProcessamento = async (dependencias, mensagemMapeada, chatId, n
     }
 
     const resultadoRemetente = await obterOuCriarUsuario(gerenciadorConfig, clienteWhatsApp, registrador)(
-      mensagemMapeada.remetenteId,
-      { 
-          id: { _serialized: chatId || 'unknown' }, 
-          isGroup: (chatId && typeof chatId === 'string') ? chatId.endsWith('@g.us') : false 
+      mensagemMapeada.author || mensagemMapeada.from,
+      {
+          id: { _serialized: chatId || 'unknown' },
+          isGroup: (chatId && typeof chatId === 'string') ? chatId.endsWith('@g.us') : false
       }, // Mock de chat object para OperacoesChat
       mensagemMapeada // Passar a mensagem para obter o pushName
     );
