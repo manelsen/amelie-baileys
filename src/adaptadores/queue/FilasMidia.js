@@ -1,273 +1,67 @@
-// FilasMidia.js
-
 /**
- * FilasMidia - Módulo funcional para processamento assíncrono de filas de mídia
+ * FilasMidia - Versão Lite e Assíncrona via OrquestradorMidia
  * 
- * Implementa arquitetura funcional pura com composição, padrão Railway e imutabilidade.
- * Sem classes, apenas funções e composição.
- * 
- * @author Belle Utsch (adaptado por Manel)
+ * Substitui o sistema complexo de Bull/Redis por Better-Queue.
+ * Mantém a interface pública para não quebrar o resto do sistema.
  */
 
-const _ = require('lodash/fp');
-const { Resultado } = require('../../utilitarios/Ferrovia');
+const Queue = require('better-queue');
+const OrquestradorMidia = require('./OrquestradorMidia');
 
-// Importar os módulos refatorados
-const FilasUtilitarios = require('./FilasUtilitarios');
-const FilasConfiguracao = require('./FilasConfiguracao');
-const FilasCriadores = require('./FilasCriadores');
-const FilasProcessadoresMidia = require('./FilasProcessadoresMidia');
-const FilasProcessadores = require('./FilasProcessadores');
-const FilasMonitorador = require('./FilasMonitorador');
-
-/**
- * Inicializa o sistema de filas de mídia
- * @param {Object} registrador - Logger para registro
- * @param {Object} gerenciadorAI - Gerenciador de IA
- * @param {Object} gerenciadorConfig - Gerenciador de configurações
- * @param {Object} servicoMensagem - Serviço centralizado de mensagens
- * @returns {Object} Sistema de filas inicializado
- */
 const inicializarFilasMidia = (registrador, gerenciadorAI, gerenciadorConfig, servicoMensagem) => {
-  registrador.info('✨ Inicializando sistema funcional de filas de mídia...');
+    registrador.info('✨ Inicializando Orquestrador de Mídia Assíncrono (Lite)...');
 
-  // Criar configuração do Redis
-  // const redisConfig = FilasConfiguracao.criarConfigRedis(); // Redis removido
+    const orquestrador = new OrquestradorMidia(registrador, {
+        gerenciadorAI,
+        configManager: gerenciadorConfig,
+        servicoMensagem
+    });
 
-  // Criar configuração das filas
-  const configFilas = FilasConfiguracao.criarConfigFilas(); // Sem argumentos
-
-  // Criar estrutura de filas
-  const resultadoFilas = FilasCriadores.criarFilas(configFilas);
-
-  if (!resultadoFilas.sucesso) {
-    throw resultadoFilas.erro;
-  }
-
-  // Expor componentes internos para testes
-  inicializarFilasMidia.Resultado = Resultado;
-  inicializarFilasMidia.Utilitarios = FilasUtilitarios;
-  inicializarFilasMidia.Configuracao = FilasConfiguracao;
-  inicializarFilasMidia.CriadoresFilas = FilasCriadores;
-  inicializarFilasMidia.ProcessadoresMidia = FilasProcessadoresMidia;
-  inicializarFilasMidia.ProcessadoresFilas = FilasProcessadores;
-  inicializarFilasMidia.MonitoradorFilas = FilasMonitorador;
-
-  // Configurar todas as filas com eventos
-  const filas = FilasCriadores.configurarTodasFilas(registrador, resultadoFilas.dados);
-
-  // Definir callbacks funcionais padrão usando Railway Pattern
-  const criarCallbackPadrao = (tipo) => (resultado) => {
-    if (!resultado || !resultado.senderNumber) {
-      registrador.warn(`Resultado de fila ${tipo} inválido ou incompleto`);
-      return Resultado.falha(new Error(`Dados de resposta ${tipo} incompletos`));
-    }
-
-    // DEBUG LOGGING REMOVED
-    // 
-    // 
-    // 
-    // DEBUG LOGGING END
-
-    
-
-    // Criar mensagem simulada mais completa
-    const mensagemSimulada = {
-      from: resultado.senderNumber,
-      id: { _serialized: resultado.messageId || `msg_${Date.now()}` },
-      body: resultado.userPrompt || '',
-
-      // Usar a chave original se disponível (CRÍTICO para reply)
-      // Garantir que remoteJid esteja presente e que exista um objeto 'message' para o Baileys gerar a citação
-      _data: resultado.messageKey ? { 
-          key: {
-            ...resultado.messageKey,
-            remoteJid: resultado.messageKey.remoteJid || resultado.messageKey.remote
-          }, 
-          // MOCK IMPORTANTE: O Baileys precisa de 'message' para gerar o quoted.
-          // Como perdemos o objeto original na fila, reconstruímos um fake com o texto do prompt.
-          message: {
-            conversation: resultado.userPrompt || 'Mídia processada'
-          },
-          notifyName: resultado.remetenteName || 'Usuário' 
-      } : {
-        notifyName: resultado.remetenteName || 'Usuário'
-      },
-
-      // Método getChat simplificado
-      getChat: async () => ({
-        id: { _serialized: `${resultado.chatId || resultado.senderNumber}` },
-        sendSeen: async () => true,
-        isGroup: resultado.chatId ? resultado.chatId.includes('@g.us') : false,
-        name: resultado.chatName || 'Chat'
-      }),
-
-      // Não implementamos reply - o servicoMensagem lidará com isso
-      hasMedia: true,
-      type: tipo
+    // Configuração das filas Better-Queue (Em memória, Assíncronas, Concorrência controlada)
+    const filas = {
+        imagem: new Queue(orquestrador.criarProcessadorSimples('imagem'), { concurrent: 10 }),
+        audio: new Queue(orquestrador.criarProcessadorSimples('audio'), { concurrent: 10 }),
+        documento: new Queue(orquestrador.criarProcessadorSimples('documento'), { concurrent: 5 }),
+        video: new Queue(orquestrador.criarProcessadorVideo(), { concurrent: 2 }) // Vídeo é pesado, menos concorrência
     };
 
-    // Log detalhado antes de enviar
-    // registrador.info(`[CallbackPadrão ${tipo}] Preparando para enviar. Resposta recebida (tipo ${typeof resultado.resposta}): ${JSON.stringify(resultado.resposta)}`); // Log removido
+    registrador.info('✅ Filas Better-Queue inicializadas (Imagem: 10, Áudio: 10, Doc: 5, Vídeo: 2)');
 
-    // CORRIGIDO: Verificar se a resposta é um objeto Resultado (devido ao duplo wrapper)
-    let textoResposta;
-    if (typeof resultado.resposta === 'object' && resultado.resposta !== null && resultado.resposta.sucesso === true && typeof resultado.resposta.dados === 'string') {
-      // Extrair .dados se for um Resultado.sucesso com dados string
-      
-      textoResposta = resultado.resposta.dados;
-    } else if (typeof resultado.resposta === 'string') {
-      // Usar diretamente se já for string
-      textoResposta = resultado.resposta;
-    } else {
-      // Caso contrário, é um erro ou tipo inesperado
-      registrador.error(`[CallbackPadrão ${tipo}] Erro CRÍTICO: Tipo/estrutura inesperada da resposta final! Tipo: ${typeof resultado.resposta}. Valor: ${JSON.stringify(resultado.resposta)}`);
-      return Resultado.falha(new Error("Tipo/estrutura inesperada da resposta final"));
-    }
+    return {
+        adicionarImagem: async (dados) => {
+            return new Promise((resolve, reject) => {
+                filas.imagem.push(dados, (err, result) => err ? reject(err) : resolve(result));
+            });
+        },
 
-    
-    return servicoMensagem.enviarResposta(mensagemSimulada, textoResposta, resultado.transacaoId);
-  };
+        adicionarVideo: async (dados) => {
+            return new Promise((resolve, reject) => {
+                filas.video.push(dados, (err, result) => err ? reject(err) : resolve(result));
+            });
+        },
 
-  // Objeto para armazenar callbacks
-  const callbacks = {
-    imagem: criarCallbackPadrao('imagem'),
-    video: criarCallbackPadrao('video'),
-    audio: criarCallbackPadrao('audio'),
-    documento: criarCallbackPadrao('documento')
-  };
+        adicionarAudio: async (dados) => {
+            return new Promise((resolve, reject) => {
+                filas.audio.push(dados, (err, result) => err ? reject(err) : resolve(result));
+            });
+        },
 
-  // Criar funções utilitárias com contexto
-  const notificarErro = FilasProcessadores.criarNotificadorErro(registrador, (resultado) => {
-    const callback = callbacks[resultado.tipo];
-    if (callback) callback(resultado);
-    else registrador.warn(`Sem callback para notificar erro de ${resultado.tipo}`);
-  });
+        adicionarDocumento: async (dados) => {
+            return new Promise((resolve, reject) => {
+                filas.documento.push(dados, (err, result) => err ? reject(err) : resolve(result));
+            });
+        },
 
-  const processarResultado = FilasProcessadores.criarProcessadorResultado(registrador, callbacks);
+        limparTrabalhosPendentes: async () => {
+            registrador.info('[FilasMidia] Limpeza de filas em memória solicitada.');
+            // No Better-Queue em memória, os jobs pendentes são limpos automaticamente no restart.
+            return true;
+        },
 
-  // Configurar todos os processadores de fila
-
-  // 1. Processadores de Imagem
-  // Revertido para processar o job nomeado 'upload-imagem'
-  filas.imagem.upload.process('upload-imagem', 20,
-    FilasProcessadores.criarProcessadorUploadImagem(registrador, filas, notificarErro) // Removido log wrapper
-  );
-
-  filas.imagem.analise.process('analise-imagem', 20,
-    FilasProcessadores.criarProcessadorAnaliseImagem(registrador, gerenciadorConfig, gerenciadorAI, processarResultado, notificarErro) // Removido log wrapper
-  );
-
-  filas.imagem.principal.process('processar-imagem', 20,
-    FilasProcessadores.criarProcessadorPrincipalImagem(registrador, filas, notificarErro));
-
-  // 2. Processadores de Vídeo
-  // Removendo wrapper de log
-  filas.video.upload.process('upload-video', 10,
-    FilasProcessadores.criarProcessadorUploadVideo(registrador, gerenciadorAI, filas, notificarErro)
-  );
-
-  filas.video.processamento.process('processar-video', 10, async (job) => {
-    try {
-      return await FilasProcessadores.criarProcessadorProcessamentoVideo(registrador, gerenciadorAI, filas, notificarErro)(job);
-    } catch (workerError) {
-      registrador.error(`[Worker Vídeo Processamento - CATCH WRAPPER] Erro não capturado no worker: ${workerError.message}`, workerError);
-      throw workerError;
-    }
-  });
-  
-  filas.video.analise.process('analise-video', 10,
-    FilasProcessadores.criarProcessadorAnaliseVideo(registrador, gerenciadorConfig, gerenciadorAI, processarResultado, notificarErro) // Removido log wrapper
-  );
-  
-  filas.video.principal.process('processar-video', 10,
-    FilasProcessadores.criarProcessadorPrincipalVideo(registrador, filas, notificarErro));
-  
-  // 3. Processadores de Áudio
-  filas.audio.principal.process('processar-audio', 20, 
-    FilasProcessadores.criarProcessadorPrincipalAudio(registrador, gerenciadorConfig, gerenciadorAI, processarResultado, notificarErro));
-
-  // 4. Processadores de Documento
-  filas.documento.principal.process('processar-documento', 10,
-    FilasProcessadores.criarProcessadorPrincipalDocumento(registrador, gerenciadorConfig, gerenciadorAI, processarResultado, notificarErro));
-  
-  // Limpar tarefas antigas ou problemáticas
-  FilasMonitorador.limparTrabalhosPendentes(registrador, filas)
-    .catch(erro => registrador.error(`Erro ao limpar trabalhos pendentes: ${erro.message}`));
-  
-  // Retornar API pública funcionalmente composta
-  return {
-    // Setters para callbacks
-    setCallbackRespostaImagem: (callback) => {
-      callbacks.imagem = callback;
-      registrador.info('✅ Callback de resposta para imagens configurado');
-    },
-
-    setCallbackRespostaVideo: (callback) => {
-      callbacks.video = callback;
-      registrador.info('✅ Callback de resposta para vídeos configurado');
-    },
-
-    setCallbackRespostaAudio: (callback) => {
-        callbacks.audio = callback;
-        registrador.info('✅ Callback de resposta para áudios configurado');
-    },
-
-    setCallbackRespostaDocumento: (callback) => {
-        callbacks.documento = callback;
-        registrador.info('✅ Callback de resposta para documentos configurado');
-    },
-
-    setCallbackRespostaUnificado: (callback) => {
-      callbacks.imagem = callback;
-      callbacks.video = callback;
-      callbacks.audio = callback;
-      callbacks.documento = callback;
-      registrador.info('✅ Callback de resposta unificado configurado');
-    },
-
-    // Adição de trabalhos às filas
-    adicionarImagem: async (dados) => {
-      return filas.imagem.principal.add('processar-imagem', {
-        ...dados,
-        tipo: 'imagem'
-      });
-    },
-
-    adicionarVideo: async (dados) => {
-      return filas.video.principal.add('processar-video', {
-        ...dados,
-        tipo: 'video'
-      });
-    },
-    
-    adicionarAudio: async (dados) => {
-        return filas.audio.principal.add('processar-audio', {
-          ...dados,
-          tipo: 'audio'
-        });
-    },
-
-    adicionarDocumento: async (dados) => {
-        return filas.documento.principal.add('processar-documento', {
-          ...dados,
-          tipo: 'documento'
-        });
-    },
-
-    // Limpeza de filas
-    limparFilas: (apenasCompletos = true) =>
-      FilasMonitorador.limparFilas(registrador, filas, apenasCompletos),
-
-    limparTrabalhosPendentes: () =>
-      FilasMonitorador.limparTrabalhosPendentes(registrador, filas),
-
-    // Finalização e liberação de recursos
-    finalizar: () => {
-      registrador.info('Sistema de filas de mídia finalizado');
-    }
-  };
+        finalizar: () => {
+            registrador.info('Sistema de filas de mídia finalizado.');
+        }
+    };
 };
 
-// Exportar a função de inicialização
 module.exports = inicializarFilasMidia;

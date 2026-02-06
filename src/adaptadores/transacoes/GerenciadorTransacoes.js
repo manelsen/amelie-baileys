@@ -31,7 +31,7 @@ class GerenciadorTransacoes extends EventEmitter {
       resultadoBusca,
       async (transacoes) => {
         if (!transacoes || transacoes.length === 0) {
-          this.registrador.info('Nenhuma transação incompleta encontrada para limpeza.');
+          this.registrador.debug('Nenhuma transação incompleta encontrada para limpeza.');
           return 0; // Retorna 0 se não há transações
         }
 

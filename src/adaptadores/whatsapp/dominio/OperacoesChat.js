@@ -9,8 +9,9 @@ const obterInformacoesChat = _.curry(async (registrador, dados) => {
   try {
     const { mensagem } = dados;
     const chat = await mensagem.getChat();
-    const chatId = chat.id?._serialized;
-    const ehGrupo = chatId.endsWith('@g.us');
+    // Blindagem para chatId (Baileys vs WWJS)
+    const chatId = (typeof chat.id === 'string') ? chat.id : chat.id?._serialized;
+    const ehGrupo = chatId && (chatId.endsWith('@g.us') || chat.isGroup);
 
     return Resultado.sucesso({
       ...dados,
@@ -19,8 +20,8 @@ const obterInformacoesChat = _.curry(async (registrador, dados) => {
       ehGrupo
     });
   } catch (erro) {
-    // Usar ID da mensagem e chat inicial para log de erro, caso 'chat' não seja obtido
-    const msgId = dados?.mensagem?.id?._serialized || 'ID Indisponível';
+    // Usar ID da mensagem e chat inicial para log de erro
+    const msgId = (typeof dados?.mensagem?.id === 'string') ? dados?.mensagem?.id : dados?.mensagem?.id?._serialized || 'ID Indisponível';
     const initialChatId = dados?.mensagem?.from || 'Chat Indisponível';
     registrador.error(`[ObterInfoChat][${initialChatId}][${msgId}] Erro ao obter informações do chat: ${erro.message}`, erro);
     return Resultado.falha(erro);
@@ -68,7 +69,7 @@ const obterOuCriarUsuario = _.curry(async (gerenciadorConfig, clienteWhatsApp, r
         // Fallback: tentar buscar o contato (mockado agora)
         try {
             const contato = await clienteWhatsApp.cliente.getContactById(remetenteIdSerializado);
-            if (contato) {
+            if (contato && contato.id) {
                 nomeUsuario = contato.pushname || contato.name || contato.shortName;
             }
         } catch (e) {
@@ -88,18 +89,13 @@ const obterOuCriarUsuario = _.curry(async (gerenciadorConfig, clienteWhatsApp, r
 
     return Resultado.sucesso({
       id: remetenteIdSerializado,
-      name: nomeUsuario,
+      name: `Usuário${idSufixo}`,
       joinedAt: new Date()
     });
   } catch (erro) {
-    // Verifica se é o erro conhecido "_serialized" para logar como warn, senão como error
-    if (erro.message && erro.message.includes("Cannot read properties of undefined (reading '_serialized')")) {
-      registrador.warn(`[OperacoesChat] Erro conhecido ao obter contato ${remetenteIdSerializado} (provavelmente interno da lib): ${erro.message}`);
-    } else {
-      registrador.error(`Erro inesperado ao obter informações do usuário ${remetenteIdSerializado}: ${erro.message}`, erro); // Log completo para outros erros
-    }
+    // Tratamento silencioso para erros de artefatos da lib legada
+    registrador.debug(`[OperacoesChat] Falha ao obter dados detalhados do usuário ${remetenteIdSerializado}: ${erro.message}`);
     
-    // Correção segura para evitar erro de substring em caso de falha
     const idSufixo = (remetenteIdSerializado && typeof remetenteIdSerializado === 'string') 
         ? remetenteIdSerializado.substring(0, 6).replace(/[^0-9]/g, '')
         : 'Desconhecido';
@@ -117,7 +113,7 @@ const verificarPermissaoComando = _.curry(async (mensagem, clienteWhatsApp, regi
   try {
     const chat = await mensagem.getChat();
     
-    const ehGrupo = chat.id && chat.id.server === 'g.us';
+    const ehGrupo = chat.id && (chat.id.server === 'g.us' || (typeof chat.id === 'string' && chat.id.endsWith('@g.us')));
     if (!ehGrupo) {
       return Resultado.sucesso(true);
     }
@@ -125,9 +121,11 @@ const verificarPermissaoComando = _.curry(async (mensagem, clienteWhatsApp, regi
     const remetenteId = mensagem.author || mensagem.from;
     
     if (chat.groupMetadata && chat.groupMetadata.participants) {
-      const participante = chat.groupMetadata.participants.find(p =>
-        p.id?._serialized === remetenteId
-      );
+      const participante = chat.groupMetadata.participants.find(p => {
+        // Blindagem: Aceita ID direto (string) ou objeto legado (_serialized)
+        const pId = (typeof p.id === 'string') ? p.id : p.id?._serialized;
+        return pId === remetenteId;
+      });
       
       if (participante) {
         const ehAdmin = participante.isAdmin || participante.isSuperAdmin;

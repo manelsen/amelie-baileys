@@ -12,7 +12,7 @@ const validarMensagem = _.curry((registrador, mensagensProcessadas, mensagem) =>
   }
 
   // Verificar deduplicação
-  const mensagemId = mensagem.id._serialized;
+  const mensagemId = (typeof mensagem.id === 'string') ? mensagem.id : mensagem.id._serialized;
 
   if (mensagensProcessadas.has(mensagemId)) {
     
@@ -40,8 +40,10 @@ const verificarMensagemSistema = _.curry((registrador, dados) => {
     (msg._data.isViewOnce === true && !msg.body)
   );
   
-  const temIdNotificacao = msg => msg.id && msg.id._serialized && 
-    msg.id._serialized.includes('NOTIFICATION');
+  const temIdNotificacao = msg => {
+    const idStr = (typeof msg.id === 'string') ? msg.id : msg.id?._serialized;
+    return idStr && idStr.includes('NOTIFICATION');
+  };
   
   const ehVazia = msg => !msg.body && !msg.hasMedia;
 

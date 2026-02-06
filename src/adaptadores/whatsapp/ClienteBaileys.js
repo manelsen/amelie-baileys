@@ -10,9 +10,11 @@ const P = require('pino');
 const qrcode = require('qrcode-terminal');
 const { baileysParaAmelie } = require('./MapperMensagem');
 
-// Logger completamente silencioso para o Baileys
-// Os eventos importantes são logados manualmente no código do ClienteBaileys
-const criarLoggerBaileys = () => P({ level: 'silent' });
+// Logger completamente silencioso para o Baileys e suas dependências internas
+const criarLoggerBaileys = () => P({ 
+    level: 'silent',
+    enabled: false // Desativa completamente para evitar vazamentos de logs de deps
+});
 
 class ClienteBaileys extends EventEmitter {
     constructor(registrador, opcoes = {}) {
@@ -185,14 +187,17 @@ class ClienteBaileys extends EventEmitter {
             get: (target, prop) => {
                 if (prop in target) return target[prop];
 
-                // Mock getContactById
+                // Mock getContactById mais robusto para evitar erros de undefined
                 if (prop === 'getContactById') {
-                    return async (id) => ({
-                        id: { _serialized: id },
-                        name: 'Usuário',
-                        shortName: 'Usuário',
-                        pushname: 'Usuário'
-                    });
+                    return async (id) => {
+                        const idStr = (typeof id === 'string') ? id : (id?._serialized || 'unknown');
+                        return {
+                            id: { _serialized: idStr },
+                            name: 'Usuário',
+                            shortName: 'Usuário',
+                            pushname: 'Usuário'
+                        };
+                    };
                 }
 
                 return undefined;

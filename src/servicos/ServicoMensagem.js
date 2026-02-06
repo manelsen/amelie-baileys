@@ -527,10 +527,42 @@ const criarServicoMensagem = (registrador, clienteWhatsApp, gerenciadorTransacoe
     }
   };
   
+  /**
+   * Envia uma mensagem baseada em dados de transação (padrão Orquestrador)
+   */
+  const enviarMensagemComTransacao = async (dados) => {
+    const { resposta, chatId, messageKey, transacaoId, tipo } = dados;
+    
+    // Obter texto seguro
+    const resultadoTexto = obterRespostaSegura(resposta);
+    if (!resultadoTexto.sucesso) {
+        registrador.error(`[MsgServ] Texto inválido para transação ${transacaoId}: ${resultadoTexto.erro.message}`);
+        return resultadoTexto;
+    }
+
+    try {
+        // Enviar via adaptador Baileys
+        const resultado = await clienteWhatsApp.enviarTexto(chatId, resultadoTexto.dados, {
+            quoted: messageKey ? { key: messageKey, message: { conversation: 'Mídia processada' } } : undefined
+        });
+
+        if (resultado.sucesso) {
+            await atualizarStatusTransacao(gerenciadorTransacoes, transacaoId, true, null, registrador);
+            return Resultado.sucesso({ metodoUsado: 'transacao_envio' });
+        }
+        throw resultado.erro || new Error("Falha no envio via adaptador");
+    } catch (erro) {
+        registrador.error(`[MsgServ] Erro ao enviar resposta de transação ${transacaoId}: ${erro.message}`);
+        await atualizarStatusTransacao(gerenciadorTransacoes, transacaoId, false, erro, registrador);
+        return Resultado.falha(erro);
+    }
+  };
+
   // Retornar objeto imutável com métodos públicos
   return Object.freeze({
     enviarResposta,
     enviarMensagemDireta,
+    enviarMensagemComTransacao,
     processarNotificacoesPendentes,
     
     // Métodos auxiliares úteis para uso externo
