@@ -3,7 +3,8 @@
 const _ = require('lodash/fp');
 const { Resultado, Trilho } = require('../../../utilitarios/Ferrovia');
 const { obterOuCriarUsuario } = require('../dominio/OperacoesChat');
-const { obterInstrucaoConversa } = require('../../../config/InstrucoesSistema'); // Importar a nova instrução
+const { obterInstrucaoConversa } = require('../../../config/InstrucoesSistema'); 
+const WebScraper = require('../../../utilitarios/WebScraper'); // Importar Scraper
 
 const criarProcessadorTexto = (dependencias) => {
   const {
@@ -76,6 +77,26 @@ const criarProcessadorTexto = (dependencias) => {
       
       await gerenciadorTransacoes.marcarComoProcessando(currentTransacaoId);
 
+      // --- Detecção de URLs (Leitura Implícita) ---
+      let contextoURL = '';
+      const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
+      const urls = mensagem.body.match(urlRegex);
+
+      if (urls && urls.length > 0) {
+          const url = urls[0]; // Pega a primeira URL
+          registrador.info(`[Texto] URL detectada: ${url}. Tentando ler...`);
+          
+          const resScraper = await WebScraper.extrairConteudo(url);
+          if (resScraper.sucesso) {
+              const { titulo, texto } = resScraper.dados;
+              contextoURL = `\n\n--- [CONTEÚDO LIDO DA URL: ${url}] ---\nTítulo: ${titulo}\nConteúdo: ${texto.substring(0, 15000)}\n--- [FIM CONTEÚDO URL] ---\nUse este conteúdo se o usuário pedir resumo ou informações sobre o link.\n`;
+              registrador.info(`[Texto] Conteúdo extraído da URL com sucesso (${texto.length} chars).`);
+          } else {
+              registrador.warn(`[Texto] Falha ao ler URL: ${resScraper.erro.message}`);
+              // Não bloqueia o fluxo, segue sem o conteúdo
+          }
+      }
+
       // Obter histórico e configuração
       
       const historico = await clienteWhatsApp.obterHistoricoMensagens(chatId);
@@ -84,9 +105,11 @@ const criarProcessadorTexto = (dependencias) => {
       // ... (formatar histórico - código omitido por brevidade) ...
       const ultimaMensagem = historico.length > 0 ? historico[historico.length - 1] : '';
       const mensagemUsuarioAtual = `${remetente.name}: ${mensagem.body}`;
+      
+      // Injeta o contextoURL no histórico
       const textoHistorico = ultimaMensagem.includes(mensagem.body)
-        ? `Histórico de chat: (formato: nome do usuário e em seguida mensagem; responda à última mensagem)\n\n${historico.join('\n')}`
-        : `Histórico de chat: (formato: nome do usuário e em seguida mensagem; responda à última mensagem)\n\n${historico.join('\n')}\n${mensagemUsuarioAtual}`;
+        ? `Histórico de chat: (formato: nome do usuário e em seguida mensagem; responda à última mensagem)\n\n${historico.join('\n')}${contextoURL}`
+        : `Histórico de chat: (formato: nome do usuário e em seguida mensagem; responda à última mensagem)\n\n${historico.join('\n')}\n${mensagemUsuarioAtual}${contextoURL}`;
 
 
       // Processar com IA

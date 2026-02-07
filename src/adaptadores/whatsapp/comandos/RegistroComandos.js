@@ -18,7 +18,7 @@ const criarComandoLongo = require('./implementacoes/ComandoLongo');
 const criarComandoCurto = require('./implementacoes/ComandoCurto');
 const criarComandoLegenda = require('./implementacoes/ComandoLegenda');
 const criarComandoFilas = require('./implementacoes/ComandoFilas');
-const criarComandoDoc = require('./implementacoes/ComandoDoc'); // <<< ADICIONADO
+const criarComandoDoc = require('./implementacoes/ComandoDoc');
 
 /**
  * Cria o registro central de comandos.
@@ -49,12 +49,32 @@ const criarRegistroComandos = (dependencias) => {
         obterListaComandos // Passa a função como dependência
     };
 
+    // Helper para instanciar classes de comando (que usam 'new') ou funções fábrica antigas
+    const instanciar = (CtorOuFabrica) => {
+        try {
+            // Se for classe (começa com letra maiúscula por convenção ou tem prototype)
+            if (CtorOuFabrica.prototype && CtorOuFabrica.prototype.constructor.name) {
+                 return new CtorOuFabrica(
+                    dependencias.registrador,
+                    dependencias.servicoMensagem,
+                    dependencias.gerenciadorAI,
+                    dependencias.gerenciadorTransacoes
+                 );
+            }
+            // Fallback para fábricas funcionais antigas
+            return CtorOuFabrica(dependenciasComFuncaoObterLista);
+        } catch (e) {
+            // Se falhar como construtor, tenta como função
+            return CtorOuFabrica(dependenciasComFuncaoObterLista);
+        }
+    };
+
     // --- Criação das Instâncias dos Comandos ---
     // O array 'arrayComandos' é preenchido aqui.
     // Todos os comandos recebem 'dependenciasComFuncaoObterLista'.
     arrayComandos = [
         criarComandoReset(dependenciasComFuncaoObterLista),
-        criarComandoAjuda(dependenciasComFuncaoObterLista), // Recebe obterListaComandos
+        criarComandoAjuda(dependenciasComFuncaoObterLista),
         criarComandoPrompt(dependenciasComFuncaoObterLista),
         criarComandoConfig(dependenciasComFuncaoObterLista),
         criarComandoUsers(dependenciasComFuncaoObterLista),
@@ -66,7 +86,7 @@ const criarRegistroComandos = (dependencias) => {
         criarComandoCurto(dependenciasComFuncaoObterLista),
         criarComandoLegenda(dependenciasComFuncaoObterLista),
         criarComandoFilas(dependenciasComFuncaoObterLista),
-        criarComandoDoc(dependenciasComFuncaoObterLista) // <<< ADICIONADO
+        criarComandoDoc(dependenciasComFuncaoObterLista)
     ];
 
     // --- Funções Públicas do Registro ---

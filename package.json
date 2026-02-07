@@ -13,6 +13,7 @@
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "better-queue": "^3.8.12",
     "bottleneck": "^2.19.5",
+    "cheerio": "^1.0.0",
     "colors": "^1.4.0",
     "crypto": "^1.0.1",
     "dotenv": "^16.4.7",
