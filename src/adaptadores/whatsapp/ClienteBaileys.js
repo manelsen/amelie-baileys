@@ -74,11 +74,11 @@ const criarClienteBaileys = (registrador, opcoes = {}) => {
         sock.ev.on('messages.upsert', async m => {
             if (m.type === 'notify') {
                 for (const msg of m.messages) {
+                    const mensagemMapeada = baileysParaAmelie(msg);
+                    if (!mensagemMapeada) continue;
+
                     if (!msg.key.fromMe) {
-                        const mensagemMapeada = baileysParaAmelie(msg);
-                        if (mensagemMapeada) {
-                            eventos.emit('mensagem', mensagemMapeada);
-                        }
+                        eventos.emit('mensagem', mensagemMapeada);
                     }
                 }
             }
@@ -105,6 +105,7 @@ const criarClienteBaileys = (registrador, opcoes = {}) => {
             }
 
             const sentMsg = await sock.sendMessage(jid, { text: conteudo }, { quoted: quotedFinal });
+            
             return { sucesso: !!sentMsg, dados: sentMsg, erro: null };
         } catch (erro) {
             registrador.error(`[Baileys] ERRO NO ENVIO: ${erro.message}`);
@@ -139,11 +140,8 @@ const criarClienteBaileys = (registrador, opcoes = {}) => {
         deveResponderNoGrupo,
         estaProntoRealmente: async () => pronto,
         
-        // Mock de histórico para compatibilidade com IAPort
-        // Futuramente pode ser implementado usando uma store local (SQLite/MongoDB)
-        obterHistoricoMensagens: async (chatId, limite = 10) => {
-            return [];
-        },
+        // Lógica de histórico revertida para mock original
+        obterHistoricoMensagens: async () => [],
 
         reconectar: async () => {
             registrador.info('[Baileys] Reconexão automática ativa.');

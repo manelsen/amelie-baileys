@@ -28,3 +28,4 @@ src/__tests__/*
 .cline*
 .roo*
 memory-bank/*
+*.bak

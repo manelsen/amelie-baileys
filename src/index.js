@@ -83,11 +83,11 @@ clienteWhatsApp.on('pronto', async () => {
 
 // 5. Tratamento de Erros
 process.on('unhandledRejection', (reason) => {
-    logger.error('Unhandled Rejection:', { reason });
+    logger.error(`Unhandled Rejection: ${reason?.message || reason}`, { stack: reason?.stack });
 });
 
 process.on('uncaughtException', (erro) => {
-    logger.error(`Uncaught Exception: ${erro.message}`, { erro });
+    logger.error(`Uncaught Exception: ${erro.message}`, { stack: erro.stack });
     if (process.env.NODE_ENV === 'production') {
         setTimeout(() => process.exit(1), 5000);
     } else {
