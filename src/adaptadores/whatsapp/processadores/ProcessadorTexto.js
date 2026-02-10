@@ -84,13 +84,13 @@ const criarProcessadorTexto = (dependencias) => {
 
       if (urls && urls.length > 0) {
           const url = urls[0]; // Pega a primeira URL
-          registrador.info(`[Texto] URL detectada: ${url}. Tentando ler...`);
+          registrador.debug(`[Texto] URL detectada: ${url}`);
           
           const resScraper = await WebScraper.extrairConteudo(url);
           if (resScraper.sucesso) {
               const { titulo, texto } = resScraper.dados;
               contextoURL = `\n\n--- [CONTEÚDO LIDO DA URL: ${url}] ---\nTítulo: ${titulo}\nConteúdo: ${texto.substring(0, 15000)}\n--- [FIM CONTEÚDO URL] ---\nUse este conteúdo se o usuário pedir resumo ou informações sobre o link.\n`;
-              registrador.info(`[Texto] Conteúdo extraído da URL com sucesso (${texto.length} chars).`);
+              registrador.debug(`[Texto] Conteúdo extraído da URL (${texto.length} chars).`);
           } else {
               registrador.warn(`[Texto] Falha ao ler URL: ${resScraper.erro.message}`);
               // Não bloqueia o fluxo, segue sem o conteúdo

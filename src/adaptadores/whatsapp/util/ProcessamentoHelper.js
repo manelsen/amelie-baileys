@@ -96,7 +96,12 @@ const gerenciarCicloVidaTransacao = async (dependencias, mensagemMapeada, chatId
     // 3. Executar Lógica Core
     registrador.debug(`[Trnsç] Executando transação ${transacaoId}`);
     const resultadoCore = await funcaoCore(transacao); // Executa a função específica passada
-    registrador.info(`[Trnsç] Transação ${transacaoId} concluída. Sucesso: ${resultadoCore.sucesso}`);
+
+    if (resultadoCore.sucesso) {
+      registrador.debug(`[Trnsç] Transação ${transacaoId} concluída.`);
+    } else {
+      registrador.warn(`[Trnsç] Transação ${transacaoId} falhou.`);
+    }
 
     // 4. Retornar resultado da lógica core (sucesso ou falha controlada por ela)
     return resultadoCore;

@@ -24,7 +24,7 @@ const criarProcessadorAudio = (dependencias) => {
 
     // 2. Execução do Ciclo de Vida da Transação
     return gerenciarCicloVidaTransacao(dependencias, mensagem, chat, async (transacao) => {
-      registrador.info(`[Audio] Adicionando áudio à fila (Transação: ${transacao.id})`);
+      registrador.info(`[Audio] Enfileirando ${transacao.id}`);
 
       // Adicionar à fila de processamento de áudio
       await filasMidia.adicionarAudio({

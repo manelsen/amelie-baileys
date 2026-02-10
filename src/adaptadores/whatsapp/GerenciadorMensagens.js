@@ -244,8 +244,8 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
   const _processarResultadoFilaMidia = async (resultado) => {
      // *** LOG DE ENTRADA NO CALLBACK ***
      // Este log é crucial para saber se esta função está sendo chamada
-     registrador.info(`[Callback] INICIANDO CALLBACK para resultado: ${JSON.stringify(resultado)}`);
-     let transacaoIdParaLog = resultado?.transacaoId || 'ID_DESCONHECIDO_NA_ENTRADA';
+     registrador.debug(`[Callback] Processando resultado da fila: ${resultado?.transacaoId}`);
+     let transacaoIdParaLog = resultado?.transacaoId || 'ID_DESCONHECIDO';
 
      try {
        // Verificação básica do resultado recebido
@@ -290,7 +290,7 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
      } catch (erro) {
        registrador.error(`[Callback] Erro GERAL ao processar resultado de fila: ${erro.message}`, erro); // Simplificado (ID na coluna)
        // Tentar registrar falha na transação se ocorrer erro GERAL aqui
-       if (transacaoIdParaLog && transacaoIdParaLog !== 'ID_DESCONHECIDO_NA_ENTRADA') {
+       if (transacaoIdParaLog && transacaoIdParaLog !== 'ID_DESCONHECIDO') {
            try {
                 await gerenciadorTransacoes.registrarFalhaEntrega(transacaoIdParaLog, `Erro no callback: ${erro.message}`);
            } catch (e) {registrador.error(`[Callback] Falha ao registrar erro de callback na transação: ${e.message}`)} // Simplificado (ID na coluna)

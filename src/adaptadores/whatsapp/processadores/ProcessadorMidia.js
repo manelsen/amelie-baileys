@@ -75,7 +75,7 @@ const criarProcessadorMidia = (dependencias) => {
       if (!mimeType) {
         mimeType = inferirMimeType(Buffer.from(dadosAnexo.data, 'base64'));
         dadosAnexo.mimetype = mimeType;
-        registrador.info(`MIME inferido: ${mimeType}`);
+        registrador.debug(`[Midia] MIME inferido: ${mimeType}`);
       }
   
       // Direcionar para o processador adequado com base no tipo MIME
@@ -97,11 +97,7 @@ const criarProcessadorMidia = (dependencias) => {
         mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || // *** Adicionar DOCX ***
         mimeType === 'application/octet-stream' // Manter octet-stream como fallback
       ) {
-        // Log simplificado (confirmando [Midia])
-        const logMsg = (mimeType === 'application/octet-stream')
-          ? `[Midia] Direcionando documento (octet-stream) para processamento.`
-          : `[Midia] Direcionando documento (${mimeType}) para processamento.`;
-        registrador.info(logMsg);
+        registrador.debug(`[Midia] Direcionando documento (${mimeType}) para processamento.`);
         return await processadorDocumento.processarMensagemDocumento({ mensagem, chatId, dadosAnexo });
       } else {
         // Este bloco agora só será atingido por tipos explicitamente não listados (e não octet-stream)

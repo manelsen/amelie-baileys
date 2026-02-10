@@ -52,7 +52,7 @@ const FilasConfiguracao = {
 
       // Verificação explícita para legenda ativa
       if (config.usarLegenda === true && tipoMidia === 'video') {
-        registrador.info(`🎬👂 Usando modo legenda para vídeo no chat ${chatId} (verificado em obterConfig)`);
+        registrador.debug(`[Config] Modo legenda ativo para vídeo.`);
         config.modoDescricao = 'legenda';
       }
 
@@ -113,7 +113,7 @@ const FilasConfiguracao = {
     if (_.isEmpty(promptUsuario)) {
       // Verificação mais explícita para o modo legenda
       if (tipoMidia === 'video' && modoDescricao === 'legenda') {
-        registrador.info('🎬👂 Ativando modo LEGENDA para vídeo - acessibilidade para surdos');
+        registrador.debug('[Config] Modo legenda ativo para vídeo.');
         return obterPromptVideoLegenda();
       }
 

@@ -6,10 +6,13 @@ const moment = require('moment-timezone');
 const colors = require('colors/safe');
 
 const configurarLogger = (nivelDebug) => {
+    // Encurta IDs de transação para os últimos 6 caracteres
+    const encurtarTxId = (id) => id.length > 10 ? `tx_..${id.slice(-6)}` : id;
+
     const meuFormato = winston.format.printf(({ timestamp, level, message }) => {
         const timestampFormatado = moment(timestamp).format('DD/MM/YYYY HH:mm:ss');
         const contextoMatch = message.match(/^\[([^\]]+)\]\s*/);
-        const transacaoMatch = message.match(/\b(tx_\d+_[a-f0-9]+)\b/);
+        const transacaoMatch = message.match(/\b(tx_[A-Fa-f0-9_]+)\b/);
 
         let contexto = 'Geral';
         let mensagemPrincipal = message;
@@ -21,7 +24,7 @@ const configurarLogger = (nivelDebug) => {
         }
 
         if (transacaoMatch) {
-            idTransacao = transacaoMatch[1];
+            idTransacao = encurtarTxId(transacaoMatch[1]);
             mensagemPrincipal = mensagemPrincipal.replace(transacaoMatch[0], '');
         }
 
@@ -31,7 +34,7 @@ const configurarLogger = (nivelDebug) => {
         const contextoFormatado = colors.green(`[${contexto}]`);
 
         let logString = `${timestampFormatado} ${levelFormatado} ${contextoFormatado} ${mensagemPrincipal}`;
-        if (idTransacao) logString += ` (ID: ${idTransacao})`;
+        if (idTransacao) logString += ` (${idTransacao})`;
 
         return logString.trim();
     });
@@ -39,7 +42,7 @@ const configurarLogger = (nivelDebug) => {
     const formatoArquivo = winston.format.printf(({ timestamp, level, message }) => {
         const timestampFormatado = moment(timestamp).format('DD/MM/YYYY HH:mm:ss');
         const contextoMatch = message.match(/^\[([^\]]+)\]\s*/);
-        const transacaoMatch = message.match(/\b(tx_\d+_[a-f0-9]+)\b/);
+        const transacaoMatch = message.match(/\b(tx_[A-Fa-f0-9_]+)\b/);
 
         let contexto = 'Geral';
         let mensagemPrincipal = message;
@@ -51,14 +54,14 @@ const configurarLogger = (nivelDebug) => {
         }
 
         if (transacaoMatch) {
-            idTransacao = transacaoMatch[1];
+            idTransacao = transacaoMatch[1]; // ID completo nos arquivos de log
             mensagemPrincipal = mensagemPrincipal.replace(transacaoMatch[0], '');
         }
 
         mensagemPrincipal = mensagemPrincipal.replace(/\s*-\s*$/, '').trim().replace(/\s{2,}/g, ' ');
 
         let logString = `${timestampFormatado} [${level.toUpperCase()}] [${contexto}] ${mensagemPrincipal}`;
-        if (idTransacao) logString += ` (ID: ${idTransacao})`;
+        if (idTransacao) logString += ` (${idTransacao})`;
 
         return logString.trim();
     });

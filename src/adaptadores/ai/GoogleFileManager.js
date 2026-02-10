@@ -19,7 +19,7 @@ class GoogleFileManager {
      * Faz upload de um arquivo local para o Google AI
      */
     async upload(caminhoArquivo, opcoes) {
-        this.logger.info(`[Arquv] Fazendo upload: ${caminhoArquivo}`);
+        this.logger.debug(`[Arquv] Upload: ${caminhoArquivo}`);
         return await this.executarComResiliencia(
             'uploadArquivoGoogle',
             () => this.manager.uploadFile(caminhoArquivo, opcoes),
@@ -49,7 +49,7 @@ class GoogleFileManager {
         );
 
         if (resultado.sucesso) {
-            this.logger.info(`[Arquv] Arquivo deletado: ${nomeArquivo}`);
+            this.logger.debug(`[Arquv] Arquivo deletado: ${nomeArquivo}`);
             return Resultado.sucesso(true);
         } else {
             this.logger.error(`[Arquv] Falha ao deletar ${nomeArquivo}: ${resultado.erro.message}`);
@@ -65,7 +65,7 @@ class GoogleFileManager {
         const delay = 10000;
 
         while (tentativas < maxTentativas) {
-            this.logger.info(`[FileManager] Aguardando processamento [${nomeArquivo}] (${tentativas + 1}/${maxTentativas})`);
+            this.logger.debug(`[Arquv] Aguardando processamento [${nomeArquivo}] (${tentativas + 1}/${maxTentativas})`);
             
             await new Promise(r => setTimeout(r, delay));
             const res = await this.obterStatus(nomeArquivo);

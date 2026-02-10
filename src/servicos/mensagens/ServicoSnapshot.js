@@ -74,7 +74,7 @@ const capturarSnapshotMensagem = async (mensagemOriginal, cliente, registrador) 
     
     // Se for mídia, capturar descrição para o contexto
     if (snapshot.temMidia) {
-      if (snapshot.tipoMidia === 'image') snapshot.descricaoMidia = '📷 [Imagem]';
+      if (snapshot.tipoMidia === 'image') snapshot.descricaoMidia = '📷 [Image]';
       else if (snapshot.tipoMidia === 'video') snapshot.descricaoMidia = '🎥 [Vídeo]';
       else if (snapshot.tipoMidia === 'audio' || snapshot.tipoMidia === 'ptt') snapshot.descricaoMidia = '🔊 [Áudio]';
       else if (snapshot.tipoMidia === 'document') snapshot.descricaoMidia = '📄 [Documento]';

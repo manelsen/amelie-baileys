@@ -24,7 +24,7 @@ const criarProcessadorImagem = (dependencias) => {
 
     // 2. Execução do Ciclo de Vida da Transação
     return gerenciarCicloVidaTransacao(dependencias, mensagem, chat, async (transacao) => {
-      registrador.info(`[Image] Adicionando imagem à fila (Transação: ${transacao.id})`);
+      registrador.info(`[Image] Enfileirando ${transacao.id}`);
 
       // Adicionar à fila de processamento de imagem
       await filasMidia.adicionarImagem({

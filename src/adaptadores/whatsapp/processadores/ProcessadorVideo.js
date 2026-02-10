@@ -84,7 +84,7 @@ const criarProcessadorVideo = (dependencias) => {
         promptUsuario = InstrucoesSistema.obterPromptVideoCurto();
       }
 
-      registrador.info(`[Video] Adicionando vídeo à fila (Transação: ${transacao.id})`);
+      registrador.info(`[Video] Enfileirando ${transacao.id}`);
 
       await filasMidia.adicionarVideo({
         tempFilename: arquivoTemporario,

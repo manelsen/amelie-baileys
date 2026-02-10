@@ -25,7 +25,7 @@ const criarProcessadorDocumento = (dependencias) => {
 
     // 2. Execução do Ciclo de Vida da Transação
     return gerenciarCicloVidaTransacao(dependencias, mensagem, chat, async (transacao) => {
-      registrador.info(`[Doc] Adicionando documento à fila (Transação: ${transacao.id})`);
+      registrador.info(`[Doc] Enfileirando ${transacao.id}`);
 
       // Adicionar à fila de processamento de documentos
       await filasMidia.adicionarDocumento({

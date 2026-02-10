@@ -25,7 +25,7 @@ const criarOrquestradorMidia = (logger, componentes) => {
         } = job;
         
         try {
-            logger.info(`[${_.capitalize(tipo)}] Processando job assíncrono - ${transacaoId}`);
+            logger.info(`[${_.capitalize(tipo)}] Processando ${transacaoId}`);
 
             const midiaBuffer = data || imageData || audioData || docData;
             if (!midiaBuffer) throw new Error(`Dados do ${tipo} inválidos ou ausentes`);
@@ -75,7 +75,7 @@ const criarOrquestradorMidia = (logger, componentes) => {
         let fileName = null;
 
         try {
-            logger.info(`[Vídeo] Iniciando fluxo de upload/análise - ${transacaoId}`);
+            logger.info(`[Video] Processando ${transacaoId}`);
 
             const uploadRes = await gerenciadorAI.uploadArquivoGoogle(tempFilename, {
                 mimeType: mimeType || 'video/mp4',

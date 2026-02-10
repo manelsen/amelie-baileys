@@ -27,13 +27,19 @@ const Telemetria = require('./monitoramento/Telemetria');
 const LimpadorTemp = require('./utilitarios/LimpadorTemp');
 
 // 1.5 Silenciar logs "hardcoded" de bibliotecas externas (ex: libsignal-node)
-const originalConsoleInfo = console.info;
-console.info = function() {
-    if (arguments[0] && typeof arguments[0] === 'string' && arguments[0].startsWith('Closing session:')) {
-        return;
-    }
-    originalConsoleInfo.apply(console, arguments);
+const silenciarConsole = (metodo) => {
+    const original = console[metodo];
+    console[metodo] = function() {
+        const msg = arguments[0];
+        if (msg && typeof msg === 'string' && (
+            msg.startsWith('Closing session:') ||
+            msg.startsWith('Removing old closed session')
+        )) return;
+        original.apply(console, arguments);
+    };
 };
+silenciarConsole('info');
+silenciarConsole('log');
 
 // 2. Garantir Diretórios
 ['./db', './temp', './logs'].forEach(dir => {
