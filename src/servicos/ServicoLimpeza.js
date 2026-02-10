@@ -51,9 +51,17 @@ const criarServicoLimpeza = (logger, componentes) => {
         }
     };
 
+    let jaIniciado = false;
+
     const iniciar = () => {
+        if (jaIniciado) {
+            logger.warn('[Lmpza] Serviço de manutenção já foi iniciado. Ignorando chamada duplicada.');
+            return;
+        }
+        jaIniciado = true;
+
         logger.info('[Lmpza] Serviço de manutenção iniciado.');
-        
+
         // Limpeza inicial imediata (Pasta Temp)
         LimpadorTemp.limpar(diretorioTemp, 30, logger);
 

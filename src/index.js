@@ -53,35 +53,34 @@ const gerenciadorAI = criarAdaptadorAI({ registrador: logger, apiKey: process.en
 const gerenciadorTransacoes = GerenciadorTransacoes(logger, path.join(process.cwd(), 'db'));
 const servicoMensagem = criarServicoMensagem(logger, clienteWhatsApp, gerenciadorTransacoes, gerenciadorNotificacoes);
 
-// 4. Configurar Eventos do Cliente
+// 4. Inicializar componentes UMA ÚNICA VEZ (fora do handler de reconexão)
+const filasMidia = inicializarFilasMidia(logger, gerenciadorAI, configManager, servicoMensagem);
+
+const gerenciadorMensagens = GerenciadorMensagens(
+    logger, clienteWhatsApp, configManager, gerenciadorAI,
+    filasMidia, gerenciadorTransacoes, servicoMensagem
+);
+
+gerenciadorMensagens.registrarComoHandler(clienteWhatsApp);
+
+const servicoLimpeza = ServicoLimpeza(logger, {
+    clienteWhatsApp, gerenciadorTransacoes, gerenciadorNotificacoes, filasMidia, gerenciadorMensagens
+});
+servicoLimpeza.iniciar();
+
+LimpadorTemp.agendarLimpeza('./temp', 60 * 60 * 1000, logger);
+
+// 5. Handler de reconexão - apenas tarefas que precisam rodar a cada conexão
 clienteWhatsApp.on('pronto', async () => {
     logger.info('✅ WhatsApp Conectado!');
 
-    const filasMidia = inicializarFilasMidia(logger, gerenciadorAI, configManager, servicoMensagem);
-    
-    const gerenciadorMensagens = GerenciadorMensagens(
-        logger, clienteWhatsApp, configManager, gerenciadorAI, 
-        filasMidia, gerenciadorTransacoes, servicoMensagem
-    );
-
-    gerenciadorMensagens.registrarComoHandler(clienteWhatsApp);
-
-    // Inicializar Serviço de Limpeza e Manutenção
-    const servicoLimpeza = ServicoLimpeza(logger, {
-        clienteWhatsApp, gerenciadorTransacoes, gerenciadorNotificacoes, filasMidia, gerenciadorMensagens
-    });
-    servicoLimpeza.iniciar();
-
-    // Limpeza inicial
     await LimpadorTemp.limpar('./temp', 30, logger);
-    LimpadorTemp.agendarLimpeza('./temp', 60 * 60 * 1000, logger); // 1 vez por hora
-
     await gerenciadorTransacoes.limparTransacoesIncompletas();
     await gerenciadorNotificacoes.processar(clienteWhatsApp);
     await gerenciadorTransacoes.processarTransacoesPendentes(clienteWhatsApp);
 });
 
-// 5. Tratamento de Erros
+// 6. Tratamento de Erros
 process.on('unhandledRejection', (reason) => {
     logger.error(`Unhandled Rejection: ${reason?.message || reason}`, { stack: reason?.stack });
 });

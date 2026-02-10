@@ -343,8 +343,15 @@ Meu repositório fica em https://github.com/manelsen/amelie`;
      return true;
    };
 
-  // Registra como handler no cliente
+  // Registra como handler no cliente (com guarda contra duplicação)
+  let handlerRegistrado = false;
+
   const registrarComoHandler = (cliente) => {
+    if (handlerRegistrado) {
+      registrador.warn('[MsgProc] Handlers já registrados. Ignorando chamada duplicada.');
+      return true;
+    }
+    handlerRegistrado = true;
     cliente.on('mensagem', processarMensagem);
     cliente.on('entrada_grupo', processarEntradaGrupo);
     return true;

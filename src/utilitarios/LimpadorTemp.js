@@ -42,9 +42,16 @@ const limpar = async (diretorio, idadeMaximaMinutos = 30, logger) => {
 };
 
 /**
- * Agenda a execução periódica da limpeza
+ * Agenda a execução periódica da limpeza (com guarda contra chamadas duplicadas)
  */
+let agendamentoAtivo = false;
+
 const agendarLimpeza = (diretorio, intervaloMs, logger) => {
+    if (agendamentoAtivo) {
+        if (logger) logger.warn('[LimpadorTemp] Limpeza já agendada. Ignorando chamada duplicada.');
+        return;
+    }
+    agendamentoAtivo = true;
     setInterval(() => limpar(diretorio, 30, logger), intervaloMs);
     if (logger) logger.info(`[LimpadorTemp] Limpeza horária ativa`);
 };
